@@ -1,5 +1,4 @@
 #Title: Longitudinal Three-Level Growth Models of Brain Structure Relations with Psychopathology Trajectories with ABCD Study Release 4.0
-#Author: Adrienne L. Romer, PhD
 #Date: 04/15/2022
 
 #clear workspace
