@@ -1,10 +1,55 @@
 ﻿* Encoding: UTF-8.
+ 
+****Compute composites of CBCL raw items for each wave based on methods of Michelini et al. (2019)****
 
+COMPUTE comp1_1=SUM(cbcl_q57_p1,cbcl_q97_p1).
+EXECUTE.
+COMPUTE comp1_2=SUM(cbcl_q57_p2,cbcl_q97_p2).
+EXECUTE.
+COMPUTE comp1_3=SUM(cbcl_q57_p3,cbcl_q97_p3).
+EXECUTE.
+
+COMPUTE comp2_1=SUM(cbcl_q22_p1,cbcl_q23_p1,cbcl_q28_p1).
+EXECUTE.
+COMPUTE comp2_2=SUM(cbcl_q22_p2,cbcl_q23_p2,cbcl_q28_p2).
+EXECUTE.
+COMPUTE comp2_3=SUM(cbcl_q22_p3,cbcl_q23_p3,cbcl_q28_p3).
+EXECUTE.
+
+COMPUTE comp3_1=SUM(cbcl_q20_p1,cbcl_q21_p1,cbcl_q106_p1).
+EXECUTE.
+COMPUTE comp3_2=SUM(cbcl_q20_p2,cbcl_q21_p2,cbcl_q106_p2).
+EXECUTE.
+COMPUTE comp3_3=SUM(cbcl_q20_p3,cbcl_q21_p3,cbcl_q106_p3).
+EXECUTE.
+
+COMPUTE comp4_1=SUM(cbcl_q81_p1,cbcl_q82_p1).
+EXECUTE.
+COMPUTE comp4_2=SUM(cbcl_q81_p2,cbcl_q82_p2).
+EXECUTE.
+COMPUTE comp4_3=SUM(cbcl_q81_p3,cbcl_q82_p3).
+EXECUTE.
+
+COMPUTE comp5_1=SUM(cbcl_q25_p1,cbcl_q48_p1).
+EXECUTE.
+COMPUTE comp5_2=SUM(cbcl_q25_p2,cbcl_q48_p2).
+EXECUTE.
+COMPUTE comp5_3=SUM(cbcl_q25_p3,cbcl_q48_p3).
+EXECUTE.
+
+COMPUTE comp6_1=SUM(cbcl_q08_p1,cbcl_q78_p1,cbcl_q10_p1).
+EXECUTE.
+COMPUTE comp6_2=SUM(cbcl_q08_p2,cbcl_q78_p2,cbcl_q10_p2).
+EXECUTE.
+COMPUTE comp6_3=SUM(cbcl_q08_p3,cbcl_q78_p3,cbcl_q10_p3).
+EXECUTE. 
+ 
 ****Create unstandardized factor scores for EXT, INT, ND, SOM, DET, and p from higher-order model and EXT, INT, ND, SOM, DET from correlated factors model for baseline wave 1, wave 2, & wave 3*******
 ****CBCL item-level variables in this syntax were taken from raw ABCD file "abcd_cbcl01.txt"*****
-****Multiply CBCL items by unstandardized weight from higher-order model****
-    
+
 ****Wave 1****
+
+****Multiply CBCL items by unstandardized weight from higher-order model****
 
 ****EXT factor from higher-order model
 
