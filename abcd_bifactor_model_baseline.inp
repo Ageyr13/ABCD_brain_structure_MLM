@@ -1,0 +1,117 @@
+TITLE:
+            ABCD Bifactor Model at Baseline;
+
+        DATA:
+            FILE IS V:\ABCD\Data\Release4.0\Analysis\Mplus\abcd_cbcl_items_3waves.csv;
+            
+
+        VARIABLE:
+             NAMES ARE
+              ID inc famID site age sex nhc multi black asian other hisp other2
+              other3 acs lang
+              q1_1 q2_1 q3_1 q4_1 q5_1 q6_1 q7_1 q8_1 q9_1 q10_1 q11_1
+              q12_1 q13_1 q14_1 q15_1 q16_1 q17_1 q18_1 q19_1 q20_1 q21_1 
+              q22_1 q23_1 q24_1 q25_1 q26_1 q27_1 q28_1 q29_1 q30_1 q31_1
+              q32_1 q33_1 q34_1 q35_1 q36_1 q37_1 q38_1 q39_1 q40_1 q41_1 
+              q42_1 q43_1 q44_1 q45_1 q46_1 q47_1 q48_1 q49_1 q50_1 q51_1 
+              q52_1 q53_1 q54_1 q55_1 q56a_1 q56b_1 q56c_1 q56d_1 q56e_1 
+              q56f_1 q56g_1 q56h_1 q57_1 q58_1 q59_1 q60_1 q61_1 q62_1 q63_1 
+              q64_1 q65_1 q66_1 q67_1 q68_1 q69_1 q70_1 q71_1 q72_1 q73_1 q74_1 
+              q75_1 q76_1 q77_1 q78_1 q79_1 q80_1 q81_1 q82_1 q83_1 q84_1 q85_1 
+              q86_1 q87_1 q88_1 q89_1 q90_1 q91_1 q92_1 q93_1 q94_1 q95_1 q96_1
+              q97_1 q98_1 q99_1 q100_1 q101_1 q102_1 q103_1 q104_1 q105_1 q106_1 
+              q107_1 q108_1 q109_1 q110_1 q111_1 q112_1 comp1_1 comp2_1 comp3_1 
+              comp4_1 comp5_1 comp6_1 q1_2 q2_2 q3_2 
+              q4_2 q5_2 q6_2 q7_2 q8_2 q9_2 q10_2 q11_2 q12_2 q13_2 q14_2 q15_2 
+              q16_2 q17_2 q18_2 q19_2 q20_2 q21_2 q22_2 q23_2 q24_2 q25_2 q26_2 
+              q27_2 q28_2 q29_2 q30_2 q31_2 q32_2 q33_2 q34_2 q35_2 q36_2 q37_2 
+              q38_2 q39_2 q40_2 q41_2 q42_2 q43_2 q44_2 q45_2 q46_2 q47_2 q48_2 
+              q49_2 q50_2 q51_2 q52_2 q53_2 q54_2 q55_2 q56a_2 q56b_2 q56c_2 q56d_2 
+              q56e_2 q56f_2 q56g_2 q56h_2 q57_2 q58_2 q59_2 q60_2 q61_2 q62_2 q63_2 
+              q64_2 q65_2 q66_2 q67_2 q68_2 q69_2 q70_2 q71_2 q72_2 q73_2 q74_2 
+              q75_2 q76_2 q77_2 q78_2 q79_2 q80_2 q81_2 q82_2 q83_2 q84_2 q85_2 
+              q86_2 q87_2 q88_2 q89_2 q90_2 q91_2 q92_2 q93_2 q94_2 q95_2 q96_2
+              q97_2 q98_2 q99_2 q100_2 q101_2 q102_2 q103_2 q104_2 q105_2 q106_2 
+              q107_2 q108_2 q109_2 q110_2 q111_2 q112_2 comp1_2 comp2_2 comp3_2 
+              comp4_2 comp5_2 comp6_2 q1_3 q2_3 q3_3 q4_3 
+              q5_3 q6_3 q7_3 q8_3 q9_3 q10_3 q11_3 q12_3 q13_3 q14_3 q15_3 q16_3 
+              q17_3 q18_3 q19_3 q20_3 q21_3 q22_3 q23_3 q24_3 q25_3 q26_3 q27_3 
+              q28_3 q29_3 q30_3 q31_3 q32_3 q33_3 q34_3 q35_3 q36_3 q37_3 q38_3 
+              q39_3 q40_3 q41_3 q42_3 q43_3 q44_3 q45_3 q46_3 q47_3 q48_3 q49_3 
+              q50_3 q51_3 q52_3 q53_3 q54_3 q55_3 q56a_3 q56b_3 q56c_3 q56d_3 
+              q56e_3 q56f_3 q56g_3 q56h_3 q57_3 q58_3 q59_3 q60_3 q61_3 q62_3 
+              q63_3 q64_3 q65_3 q66_3 q67_3 q68_3 q69_3 q70_3 q71_3 q72_3 q73_3 
+              q74_3 q75_3 q76_3 q77_3 q78_3 q79_3 q80_3 q81_3 q82_3 q83_3 q84_3 
+              q85_3 q86_3 q87_3 q88_3 q89_3 q90_3 q91_3 q92_3 q93_3 q94_3 q95_3 
+              q96_3 q97_3 q98_3 q99_3 q100_3 q101_3 q102_3 q103_3 q104_3 q105_3 
+              q106_3 q107_3 q108_3 q109_3 q110_3 q111_3 q112_3 comp1_3 comp2_3 
+              comp3_3 comp4_3 comp5_3 comp6_3;
+
+            USEVARIABLES ARE
+              comp1_1 q16_1 comp2_1 q37_1 q95_1 q3_1 comp3_1 q68_1 
+              q26_1 q90_1 q94_1 comp4_1 q86_1 q43_1 q67_1 q87_1 q27_1 
+              comp5_1 q89_1 q19_1 q39_1 q34_1 q88_1 q7_1 q109_1 
+              q50_1 q112_1 q32_1 q52_1 q45_1 q31_1 q35_1 
+              q30_1 q29_1 q12_1 comp6_1 q17_1 q13_1 q62_1 
+              q46_1 q4_1 q9_1 q61_1 q66_1 q1_1 q36_1 q64_1  
+              q56c_1 q56f_1 q56g_1 q56b_1 
+              q56a_1 q51_1 q56d_1 q56e_1 q111_1 q42_1 q75_1 
+              q65_1 q102_1;
+
+            CATEGORICAL ARE
+               comp1_1 q16_1 comp2_1 q37_1 q95_1 q3_1 comp3_1 q68_1 
+               q26_1 q90_1 q94_1 comp4_1 q86_1 q43_1 q67_1 q87_1 q27_1 
+               comp5_1 q89_1 q19_1 q39_1 q34_1 q88_1 q7_1 q109_1 
+               q50_1 q112_1 q32_1 q52_1 q45_1 q31_1 q35_1 
+               q30_1 q29_1 q12_1 comp6_1 q17_1 q13_1 q62_1 
+               q46_1 q4_1 q9_1 q61_1 q66_1 q1_1 q36_1 q64_1  
+               q56c_1 q56f_1 q56g_1 q56b_1 
+               q56a_1 q51_1 q56d_1 q56e_1 q111_1 q42_1 q75_1 
+               q65_1 q102_1;
+
+            CLUSTER = famID;
+            
+            MISSING 
+              ALL (-99);
+
+            IDVARIABLE IS
+              ID;
+
+        ANALYSIS: ESTIMATOR=WLSMV; TYPE=COMPLEX;
+
+        MODEL:
+
+               !bifactor model with p, EXT, INT, ND, SOMAT, DETACH factors
+                ext BY comp1_1* q16_1 comp2_1 q37_1 q95_1 q3_1 comp3_1 q68_1 
+                q26_1 q90_1 q94_1 comp4_1 q86_1 q43_1 q67_1 q87_1 q27_1 
+                comp5_1 q89_1 q19_1 q39_1 q34_1 q88_1 q7_1 q109_1;
+
+                int BY q50_1* q112_1 q32_1 q52_1 q45_1 q31_1 q35_1 q30_1 q29_1 
+                q12_1;
+
+                nd BY comp6_1* q17_1 q13_1 q62_1 q46_1 q4_1 q9_1 q61_1 q66_1 q1_1 
+                q36_1 q64_1;
+
+                somat BY q56c_1* q56f_1 q56g_1 q56b_1 q56a_1 q51_1 q56d_1 q56e_1;
+
+                detach BY q111_1* q42_1 q75_1 q65_1 q102_1;
+
+                p BY comp1_1* q16_1 comp2_1 q37_1 q95_1 q3_1 comp3_1 q68_1 
+                q26_1 q90_1 q94_1 comp4_1 q86_1 q43_1 q67_1 q87_1 q27_1 
+                comp5_1 q89_1 q19_1 q39_1 q34_1 q88_1 q7_1 q109_1
+                q50_1 q112_1 q32_1 q52_1 q45_1 q31_1 q35_1 q30_1 q29_1 
+                q12_1 comp6_1 q17_1 q13_1 q62_1 q46_1 q4_1 q9_1 q61_1 
+                q66_1 q1_1 q36_1 q64_1 q56c_1 q56f_1 q56g_1 q56b_1 q56a_1 
+                q51_1 q56d_1 q56e_1 q111_1 q42_1 q75_1 q65_1 q102_1;
+
+                [ext@0 int@0 nd@0 somat@0 detach@0 p@0];
+                ext@1 int@1 nd@1 somat@1 detach@1 p@1;
+
+                !correlations between factors set to zero
+                p WITH ext@0 int@0 nd@0 somat@0 detach@0;
+                ext WITH int@0 nd@0 somat@0 detach@0;
+                int WITH nd@0 somat@0 detach@0;
+                nd WITH somat@0 detach@0;
+                somat WITH detach@0;
+
+          OUTPUT: SAMPSTAT STANDARDIZED TECH1 TECH4 CINTERVAL;
