@@ -1,15 +1,13 @@
-        TITLE:
-            ABCD Higher-Order Factor Model at Baseline;
+TITLE:
+            ABCD Higher-Order Model at Baseline;
 
         DATA:
-            FILE IS V:\ABCD\Data\Release4.0\Analysis\Mplus\cbcl_items_3waves.csv;
+            FILE IS V:\ABCD\Data\Release4.0\Analysis\Mplus\abcd_cbcl_items_3waves.csv;
             
-
         VARIABLE:
              NAMES ARE
-              ID famID mri site age sex nhc multi black asian other hisp other2
-              other3 achieva discov ingen prisma meds pareduc faminc acs lang
-              subvol vol area thick
+              ID inc famID site age sex nhc multi black asian other hisp other2
+              other3 acs lang
               q1_1 q2_1 q3_1 q4_1 q5_1 q6_1 q7_1 q8_1 q9_1 q10_1 q11_1
               q12_1 q13_1 q14_1 q15_1 q16_1 q17_1 q18_1 q19_1 q20_1 q21_1 
               q22_1 q23_1 q24_1 q25_1 q26_1 q27_1 q28_1 q29_1 q30_1 q31_1
@@ -22,7 +20,7 @@
               q86_1 q87_1 q88_1 q89_1 q90_1 q91_1 q92_1 q93_1 q94_1 q95_1 q96_1
               q97_1 q98_1 q99_1 q100_1 q101_1 q102_1 q103_1 q104_1 q105_1 q106_1 
               q107_1 q108_1 q109_1 q110_1 q111_1 q112_1 comp1_1 comp2_1 comp3_1 
-              comp4_1 comp5_1 comp6_1 comp7_1 comp8_1 comp9_1 q1_2 q2_2 q3_2 
+              comp4_1 comp5_1 comp6_1 q1_2 q2_2 q3_2 
               q4_2 q5_2 q6_2 q7_2 q8_2 q9_2 q10_2 q11_2 q12_2 q13_2 q14_2 q15_2 
               q16_2 q17_2 q18_2 q19_2 q20_2 q21_2 q22_2 q23_2 q24_2 q25_2 q26_2 
               q27_2 q28_2 q29_2 q30_2 q31_2 q32_2 q33_2 q34_2 q35_2 q36_2 q37_2 
@@ -34,7 +32,7 @@
               q86_2 q87_2 q88_2 q89_2 q90_2 q91_2 q92_2 q93_2 q94_2 q95_2 q96_2
               q97_2 q98_2 q99_2 q100_2 q101_2 q102_2 q103_2 q104_2 q105_2 q106_2 
               q107_2 q108_2 q109_2 q110_2 q111_2 q112_2 comp1_2 comp2_2 comp3_2 
-              comp4_2 comp5_2 comp6_2 comp7_2 comp8_2 comp9_2 q1_3 q2_3 q3_3 q4_3 
+              comp4_2 comp5_2 comp6_2 q1_3 q2_3 q3_3 q4_3 
               q5_3 q6_3 q7_3 q8_3 q9_3 q10_3 q11_3 q12_3 q13_3 q14_3 q15_3 q16_3 
               q17_3 q18_3 q19_3 q20_3 q21_3 q22_3 q23_3 q24_3 q25_3 q26_3 q27_3 
               q28_3 q29_3 q30_3 q31_3 q32_3 q33_3 q34_3 q35_3 q36_3 q37_3 q38_3 
@@ -46,7 +44,7 @@
               q85_3 q86_3 q87_3 q88_3 q89_3 q90_3 q91_3 q92_3 q93_3 q94_3 q95_3 
               q96_3 q97_3 q98_3 q99_3 q100_3 q101_3 q102_3 q103_3 q104_3 q105_3 
               q106_3 q107_3 q108_3 q109_3 q110_3 q111_3 q112_3 comp1_3 comp2_3 
-              comp3_3 comp4_3 comp5_3 comp6_3 comp7_3 comp8_3 comp9_3;
+              comp3_3 comp4_3 comp5_3 comp6_3;
 
             USEVARIABLES ARE
               comp1_1 q16_1 comp2_1 q37_1 q95_1 q3_1 comp3_1 q68_1 
@@ -70,20 +68,19 @@
                q56a_1 q51_1 q56d_1 q56e_1 q111_1 q42_1 q75_1 
                q65_1 q102_1;
 
-            !include participants who passed MRI quality assurance (n=9212)
-            USEOBSERVATION ARE (mri EQ 1);
-
-            MISSING
+            CLUSTER = famID;
+            
+            MISSING 
               ALL (-99);
 
             IDVARIABLE IS
               ID;
 
-        ANALYSIS: ESTIMATOR=WLSMV; 
+        ANALYSIS: ESTIMATOR=WLSMV; TYPE=COMPLEX;
 
         MODEL:
-               !higher-order model with EXT, INT, ND, SOMAT, DETACH intermediate 
-               !factors and p as higher-order factor
+
+               !higher order factors model with p, EXT, INT, ND, SOMAT, DETACH factors
                 ext BY comp1_1* q16_1 comp2_1 q37_1 q95_1 q3_1 comp3_1 q68_1 
                 q26_1 q90_1 q94_1 comp4_1 q86_1 q43_1 q67_1 q87_1 q27_1 
                 comp5_1 q89_1 q19_1 q39_1 q34_1 q88_1 q7_1 q109_1;
