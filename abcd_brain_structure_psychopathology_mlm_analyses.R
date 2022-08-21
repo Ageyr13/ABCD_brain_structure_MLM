@@ -1,5 +1,5 @@
 #Title: Longitudinal Three-Level Growth Models of Brain Structure Relations with Psychopathology Trajectories with ABCD Study Release 4.0
-#Date: 04/15/2022
+#Date: 08/19/2022
 
 #clear workspace
 rm(list=ls())
@@ -11,29 +11,31 @@ library(psych)              # use for descriptive statistics
 library(ggplot2)            # use for plots
 library(lme4)               # fits mixed models
 library(lmerTest)           # provides t-tests for fixed effects
-library(nlme)               # fits mixed models with hetero residuals
 library(dplyr)              # load dplyr package
-library(performance)        #computes ICC
+library(performance)        # computes ICC
 library(interactions)       # use for calculating simple intercepts and slopes
-library(plyr)
-library(ggseg)
-library(ggseg3d)
-library(forestplot)
+library(plyr)               # load dplyr package
+library(ggseg)              # use for brain figures
+library(ggseg3d)            # use for brain figures
+library(forestplot)         # use for forest plot figures
+library(multcomp)           # multiple comparisons
+library(stats)              # FDR correction
 
 #set working directory
-setwd("V:/ABCD/Data/Release4.0/Analysis/MLM")
+setwd("V:/ABCD/Data/Release4.0/Analysis/MLM/updated")
 
-#import data
-pfactor <- read.csv("abcd_p_factor_brain_longitudinal_unst_fs_long_rel4.csv",header=TRUE)
+#import long dataset
+pfactor <- read.csv("abcd_brain_structure_factor_scores_long.csv",header=TRUE)
 
 #recode all missing values from -99 to NA
 pfactor[pfactor == -99] <- NA
 
 #recode wave from values of 1,2,3 to 0,1,2
-pfactor$wave <- pfactor$Index1 - 1
+pfactor$wave <- pfactor$Wave1 - 1
 
-#remove missing values
-pfactor_red <- pfactor[which(pfactor$wave!="NA" & pfactor$p!="NA" & pfactor$Hispanic_only!="NA"),]
+#remove excluded subjects/missing values
+pfactor_red <- pfactor[which(pfactor$inclusion_fam_old_high!=0 & pfactor$cbcl_demo_inclusion_use!=0 & pfactor$smri_inclusion_use!=0 &
+                               pfactor$wave!="NA" & pfactor$p_ho!="NA" & pfactor$smri_area_cdk_banksstslh!="NA"),]
 
 #create new variable renaming nums to id
 pfactor_red$id <- pfactor_red$nums
@@ -41,30 +43,26 @@ pfactor_red$id <- pfactor_red$nums
 #create new variables renaming TICs of no interest
 pfactor_red$age <- pfactor_red$interview_age_baseline
 pfactor_red$sex <- pfactor_red$sex_coded
-pfactor_red$black <- pfactor_red$Black_onerace
-pfactor_red$asian <- pfactor_red$Asian_onerace
-pfactor_red$hisp <- pfactor_red$Hispanic_only
-pfactor_red$other <- pfactor_red$Other_multiracial
 
 ##Descriptive statistics, means, and histograms
 
 #examine descriptives of factor scores to get sense of functional form of mean trajectory
-describeBy(pfactor_red$p, group=pfactor_red$wave)
-describeBy(pfactor_red$ext, group=pfactor_red$wave)
-describeBy(pfactor_red$int, group=pfactor_red$wave)
-describeBy(pfactor_red$nd, group=pfactor_red$wave)
-describeBy(pfactor_red$som, group=pfactor_red$wave)
-describeBy(pfactor_red$det, group=pfactor_red$wave)
+describeBy(pfactor_red$p_ho, group=pfactor_red$wave)
+describeBy(pfactor_red$ext_corr, group=pfactor_red$wave)
+describeBy(pfactor_red$int_corr, group=pfactor_red$wave)
+describeBy(pfactor_red$nd_corr, group=pfactor_red$wave)
+describeBy(pfactor_red$som_corr, group=pfactor_red$wave)
+describeBy(pfactor_red$det_corr, group=pfactor_red$wave)
 
 #plot means of factor scores by wave
-meansp <- aggregate(p~wave,pfactor_red,mean)
+meansp <- aggregate(p_ho~wave,pfactor_red,mean)
 meansext <- aggregate(ext~wave,pfactor_red,mean)
 meansint <- aggregate(int~wave,pfactor_red,mean)
 meansnd <- aggregate(nd~wave,pfactor_red,mean)
 meanssom <- aggregate(som~wave,pfactor_red,mean)
 meansdet <- aggregate(det~wave,pfactor_red,mean)
 
-ggplot(meansp,aes(wave, p)) +
+ggplot(meansp,aes(wave, p_ho)) +
   geom_line(inherit.aes=TRUE) +
   #geom_smooth(method='lm',se=FALSE,color="red") + 
   geom_point(color='black') +
@@ -107,12 +105,20 @@ ggplot(meansdet,aes(wave, det)) +
   labs(y = "Mean DET Factor Scores")
 
 #scale p, ext, int, nd, som, det factor scores
-pfactor_red$scalep <- scale(pfactor_red$p)
-pfactor_red$scaleext <- scale(pfactor_red$ext)
-pfactor_red$scaleint <- scale(pfactor_red$int)
-pfactor_red$scalend <- scale(pfactor_red$nd)
-pfactor_red$scalesom <- scale(pfactor_red$som)
-pfactor_red$scaledet <- scale(pfactor_red$det)
+pfactor_red$scalep <- scale(pfactor_red$p_ho) #from higher-order model 
+pfactor_red$scaleext <- scale(pfactor_red$ext_corr) #from correlated factors model 
+pfactor_red$scaleint <- scale(pfactor_red$int_corr) #from correlated factors model
+pfactor_red$scalend <- scale(pfactor_red$nd_corr) #from correlated factors model
+pfactor_red$scalesom <- scale(pfactor_red$som_corr) #from correlated factors model
+pfactor_red$scaledet <- scale(pfactor_red$det_corr) #from correlated factors model
+
+#scale factor scores from bifactor model
+pfactor_red$scalep_bi <- scale(pfactor_red$p_bi) 
+pfactor_red$scaleext_bi <- scale(pfactor_red$ext_bi)
+pfactor_red$scaleint_bi <- scale(pfactor_red$int_bi)
+pfactor_red$scalend_bi <- scale(pfactor_red$nd_bi)
+pfactor_red$scalesom_bi <- scale(pfactor_red$som_bi)
+pfactor_red$scaledet_bi <- scale(pfactor_red$det_bi)
 
 #Histograms of factor scores over wave
 
@@ -167,58 +173,64 @@ hist(pfactor_red$scaledet,
 ##three level MLM of repeated measures of psychopathology factor scores nested within subject nested within site
 
 #random effects ANOVA and intrasubject correlations of factor scores
-re_ANOVAp_3level_p <- lmer(p ~ (1|site_id/id), data = pfactor_red)
+re_ANOVAp_3level_p <- lmer(p_ho ~ (1|site_id/id), data = pfactor_red,
+                           control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
 summary(re_ANOVAp_3level_p)
 icc(re_ANOVAp_3level_p)
 
-re_ANOVAext_3level_ext <- lmer(ext ~ (1|site_id/id), data = pfactor_red)
+re_ANOVAext_3level_ext <- lmer(ext_corr ~ (1|site_id/id), data = pfactor_red,
+                               control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
 summary(re_ANOVAext_3level_ext)
 icc(re_ANOVAext_3level_ext)
 
-re_ANOVAint_3level_int <- lmer(int ~ (1|site_id/id), data = pfactor_red)
+re_ANOVAint_3level_int <- lmer(int_corr ~ (1|site_id/id), data = pfactor_red,
+                               control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
 summary(re_ANOVAint_3level_int)
 icc(re_ANOVAint_3level_int)
 
-re_ANOVAnd_3level_nd <- lmer(nd ~ (1|site_id/id), data = pfactor_red)
+re_ANOVAnd_3level_nd <- lmer(nd_corr ~ (1|site_id/id), data = pfactor_red,
+                             control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
 summary(re_ANOVAnd_3level_nd)
 icc(re_ANOVAnd_3level_nd)
 
-re_ANOVAsom_3level_som <- lmer(som ~ (1|site_id/id), data = pfactor_red)
+re_ANOVAsom_3level_som <- lmer(som_corr ~ (1|site_id/id), data = pfactor_red,
+                               control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
 summary(re_ANOVAsom_3level_som)
 icc(re_ANOVAsom_3level_som)
 
-re_ANOVAdet_3level_det <- lmer(det ~ (1|site_id/id), data = pfactor_red)
+re_ANOVAdet_3level_det <- lmer(det_corr ~ (1|site_id/id), data = pfactor_red,
+                               control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
 summary(re_ANOVAdet_3level_det)
 icc(re_ANOVAdet_3level_det)
 
 
 #Unconditional three-level linear growth model with random intercept and slope and homoscedastic residuals for each of the factor scores
-uncond_growth_3level_model_p <- lmer(p ~ wave + (1 + wave|site_id/id), 
-                                   data = pfactor_red, 
-                                   control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-summary(uncond_growth_3level_model_p)
-
-uncond_growth_3level_model_ext <- lmer(ext ~ wave + (1 + wave|site_id/id), 
+uncond_growth_3level_model_p <- lmer(p_ho ~ wave + (1 + wave|site_id/id), 
                                      data = pfactor_red, 
                                      control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
+summary(uncond_growth_3level_model_p)
+
+uncond_growth_3level_model_ext <- lmer(ext_corr ~ wave + (1 + wave|site_id/id), 
+                                       data = pfactor_red, 
+                                       control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
 summary(uncond_growth_3level_model_ext)
 
-uncond_growth_3level_model_int <- lmer(int ~ wave + (1 + wave|site_id/id), 
+uncond_growth_3level_model_int <- lmer(int_corr ~ wave + (1 + wave|site_id/id), 
                                        data = pfactor_red, 
                                        control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
 summary(uncond_growth_3level_model_int)
 
-uncond_growth_3level_model_nd <- lmer(nd ~ wave + (1 + wave|site_id/id), 
-                                       data = pfactor_red, 
-                                       control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
+uncond_growth_3level_model_nd <- lmer(nd_corr ~ wave + (1 + wave|site_id/id), 
+                                      data = pfactor_red, 
+                                      control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
 summary(uncond_growth_3level_model_nd)
 
-uncond_growth_3level_model_som <- lmer(som ~ wave + (1 + wave|site_id/id), 
+uncond_growth_3level_model_som <- lmer(som_corr ~ wave + (1 + wave|site_id/id), 
                                        data = pfactor_red, 
                                        control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
 summary(uncond_growth_3level_model_som)
 
-uncond_growth_3level_model_det <- lmer(det ~ wave + (1 + wave|site_id/id), 
+uncond_growth_3level_model_det <- lmer(det_corr ~ wave + (1 + wave|site_id/id), 
                                        data = pfactor_red, 
                                        control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
 summary(uncond_growth_3level_model_det)
@@ -261,132 +273,132 @@ pfactor_red$scalesite_subcort_vol_cent <- scale(pfactor_red$site_subcort_vol_cen
 pfactor_red$scalesite_totalarea_cent <- scale(pfactor_red$site_totalarea_cent)
 pfactor_red$scalesite_meanct_cent <- scale(pfactor_red$site_meanct_cent)
 
-#conditional three-level growth model with global brain structure measures predicting the psychopathology factor scores (looped) 
-#covariates: sex, age, race/ethnicity dummies, scanner model dummies
+#conditional three-level growth model with global brain structure measures predicting the psychopathology factor scores from higher-order/correlated factors models (looped) 
+#covariates: sex, age, scanner model dummies
 #standardized betas, standard errors, and p-values for intercepts (i.e., intb, intse, intp) and slopes (i.e., slb, slse, slp) were saved in a csv file
 
 wholebrainst <- data.frame(x=c("CT_int","CT_sl","SA_int","SA_sl","cortvol_int","cortvol_sl","subcortvol_int","subcortvol_sl"))
-for (i in 420:425){ # columns are factor scores
-  CT_intb <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +
-                             site_meanct_cent + scalesubjmeanct + site_meanct_cent*wave + scalesubjmeanct*wave +
+for (i in 424:429){ # columns are factor scores
+  CT_intb <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma +
+                            site_meanct_cent + scalesubjmeanct + site_meanct_cent*wave + scalesubjmeanct*wave +
                             (1 + wave|site_id/id), #random intercept and slope for subject and site 
                           data = pfactor_red, 
-                          control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[14,1]
-  CT_slb <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +
-                            site_meanct_cent + scalesubjmeanct + site_meanct_cent*wave + scalesubjmeanct*wave +
+                          control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[10,1]
+  CT_slb <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma +
+                           site_meanct_cent + scalesubjmeanct + site_meanct_cent*wave + scalesubjmeanct*wave +
                            (1 + wave|site_id/id), 
                          data = pfactor_red, 
-                         control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[16,1]
-  CT_intse <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +
+                         control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[12,1]
+  CT_intse <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma +
                              site_meanct_cent + scalesubjmeanct + site_meanct_cent*wave + scalesubjmeanct*wave + 
                              (1 + wave|site_id/id), 
                            data = pfactor_red, 
-                           control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[14,2]
-  CT_slse <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +
+                           control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[10,2]
+  CT_slse <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma +
                             site_meanct_cent + scalesubjmeanct + site_meanct_cent*wave + scalesubjmeanct*wave + 
                             (1 + wave|site_id/id), 
                           data = pfactor_red, 
-                          control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[16,2]
-  CT_intp <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +
+                          control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[12,2]
+  CT_intp <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma +
                             site_meanct_cent + scalesubjmeanct + site_meanct_cent*wave + scalesubjmeanct*wave + 
                             (1 + wave|site_id/id), 
                           data = pfactor_red, 
-                          control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[14,5]
-  CT_slp <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +
+                          control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[10,5]
+  CT_slp <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma +
                            site_meanct_cent + scalesubjmeanct + site_meanct_cent*wave + scalesubjmeanct*wave + 
                            (1 + wave|site_id/id), 
                          data = pfactor_red, 
-                         control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[16,5]
-  SA_intb <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +
+                         control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[12,5]
+  SA_intb <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma +
                             site_totalarea_cent + scalesubjtotalarea + site_totalarea_cent*wave + scalesubjtotalarea*wave + 
                             (1 + wave|site_id/id), 
                           data = pfactor_red, 
-                          control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[14,1]
-  SA_slb <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +
+                          control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[10,1]
+  SA_slb <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma +
                            site_totalarea_cent + scalesubjtotalarea + site_totalarea_cent*wave + scalesubjtotalarea*wave + 
                            (1 + wave|site_id/id), 
                          data = pfactor_red, 
-                         control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[16,1]
-  SA_intse <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +
+                         control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[12,1]
+  SA_intse <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma +
                              site_totalarea_cent + scalesubjtotalarea + site_totalarea_cent*wave + scalesubjtotalarea*wave +
                              (1 + wave|site_id/id), 
                            data = pfactor_red, 
-                           control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[14,2]
-  SA_slse <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +
+                           control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[10,2]
+  SA_slse <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma +
                             site_totalarea_cent + scalesubjtotalarea + site_totalarea_cent*wave + scalesubjtotalarea*wave +
                             (1 + wave|site_id/id), 
                           data = pfactor_red, 
-                          control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[16,2]
-  SA_intp <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +
+                          control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[12,2]
+  SA_intp <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma +
                             site_totalarea_cent + scalesubjtotalarea + site_totalarea_cent*wave + scalesubjtotalarea*wave +
                             (1 + wave|site_id/id), 
                           data = pfactor_red, 
-                          control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[14,5]
-  SA_slp <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +
+                          control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[10,5]
+  SA_slp <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma +
                            site_totalarea_cent + scalesubjtotalarea + site_totalarea_cent*wave + scalesubjtotalarea*wave + 
                            (1 + wave|site_id/id), 
                          data = pfactor_red, 
-                         control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[16,5]
-  cortvol_intb <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +
+                         control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[12,5]
+  cortvol_intb <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma +
                                  site_totalvol_cent + scalesubjtotalvol + site_totalvol_cent*wave + scalesubjtotalvol*wave + 
                                  (1 + wave|site_id/id), 
                                data = pfactor_red, 
-                               control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[14,1]
-  cortvol_slb <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +
+                               control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[10,1]
+  cortvol_slb <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma +
                                 site_totalvol_cent + scalesubjtotalvol + site_totalvol_cent*wave + scalesubjtotalvol*wave + 
                                 (1 + wave|site_id/id), 
                               data = pfactor_red, 
-                              control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[16,1]
-  cortvol_intse <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +
+                              control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[12,1]
+  cortvol_intse <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma +
                                   site_totalvol_cent + scalesubjtotalvol + site_totalvol_cent*wave + scalesubjtotalvol*wave + 
                                   (1 + wave|site_id/id), 
                                 data = pfactor_red, 
-                                control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[14,2]
-  cortvol_slse <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +
+                                control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[10,2]
+  cortvol_slse <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma +
                                  site_totalvol_cent + scalesubjtotalvol + site_totalvol_cent*wave + scalesubjtotalvol*wave + 
                                  (1 + wave|site_id/id), 
                                data = pfactor_red, 
-                               control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[16,2]
-  cortvol_intp <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +
+                               control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[12,2]
+  cortvol_intp <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma +
                                  site_totalvol_cent + scalesubjtotalvol + site_totalvol_cent*wave + scalesubjtotalvol*wave + 
                                  (1 + wave|site_id/id), 
                                data = pfactor_red, 
-                               control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[14,5]
-  cortvol_slp <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +
+                               control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[10,5]
+  cortvol_slp <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma +
                                 site_totalvol_cent + scalesubjtotalvol + site_totalvol_cent*wave + scalesubjtotalvol*wave + 
                                 (1 + wave|site_id/id), 
                               data = pfactor_red, 
-                              control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[16,5]
-  subcortvol_intb <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +
+                              control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[12,5]
+  subcortvol_intb <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma +
                                     site_subcort_vol_cent + scalesubjsubcort_vol + site_subcort_vol_cent*wave + scalesubjsubcort_vol*wave + 
                                     (1 + wave|site_id/id), 
                                   data = pfactor_red, 
-                                  control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[14,1]
-  subcortvol_slb <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +
+                                  control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[10,1]
+  subcortvol_slb <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma +
                                    site_subcort_vol_cent + scalesubjsubcort_vol + site_subcort_vol_cent*wave + scalesubjsubcort_vol*wave +
                                    (1 + wave|site_id/id), 
                                  data = pfactor_red, 
-                                 control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[16,1]
-  subcortvol_intse <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +
+                                 control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[12,1]
+  subcortvol_intse <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma +
                                      site_subcort_vol_cent + scalesubjsubcort_vol + site_subcort_vol_cent*wave + scalesubjsubcort_vol*wave +
                                      (1 + wave|site_id/id), 
                                    data = pfactor_red, 
-                                   control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[14,2]
-  subcortvol_slse <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +
+                                   control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[10,2]
+  subcortvol_slse <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma +
                                     site_subcort_vol_cent + scalesubjsubcort_vol + site_subcort_vol_cent*wave + scalesubjsubcort_vol*wave +
                                     (1 + wave|site_id/id), 
                                   data = pfactor_red, 
-                                  control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[16,2]
-  subcortvol_intp <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +
+                                  control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[12,2]
+  subcortvol_intp <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma +
                                     site_subcort_vol_cent + scalesubjsubcort_vol + site_subcort_vol_cent*wave + scalesubjsubcort_vol*wave + 
                                     (1 + wave|site_id/id), 
                                   data = pfactor_red, 
-                                  control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[14,5]
-  subcortvol_slp <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +
+                                  control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[10,5]
+  subcortvol_slp <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma +
                                    site_subcort_vol_cent + scalesubjsubcort_vol + site_subcort_vol_cent*wave + scalesubjsubcort_vol*wave + 
                                    (1 + wave|site_id/id), 
                                  data = pfactor_red, 
-                                 control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[16,5]
+                                 control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[12,5]
   newb <- c(CT_intb,CT_slb,SA_intb,SA_slb,cortvol_intb,cortvol_slb,subcortvol_intb,subcortvol_slb)
   wholebrainst <- cbind(wholebrainst,newb)
   names(wholebrainst)[ncol(wholebrainst)] <- names(pfactor_red)[i]
@@ -416,40 +428,44 @@ wholebrainst$ci_upper_som <- wholebrainst$som_beta + 1.96*wholebrainst$som_se
 wholebrainst$ci_lower_det <- wholebrainst$det_beta - 1.96*wholebrainst$det_se 
 wholebrainst$ci_upper_det <- wholebrainst$det_beta + 1.96*wholebrainst$det_se
 
-write.csv(wholebrainst, "Global Structure MLM Analysis Output Standardized for Table.csv") #write csv file
+write.csv(wholebrainst, "Global Structure MLM Analysis Output Standardized for Table3.csv") #write csv file
 
-#not looped 3level growth model
+#FDR correction
+pval <- dplyr::select(wholebrainst, c("p_pval","ext_pval","int_pval","nd_pval","som_pval","det_pval"))
+pval_fdr <- transform(pval, adj.p = p.adjust(as.matrix(pval),method = "BH"))
+sum(pval_fdr$adj.p<0.05)
+write.csv(pval_fdr, "FDR adjusted pvalues_global structure analysis.csv")
 
 #Conditional three-level linear growth model: cross-level interactions, total volume predicting rates of change in p (switch out ext, int, nd, som, det for p)
-model_cortvol <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma + 
-                         scalesite_totalvol_cent + scalesubjtotalvol + scalesite_totalvol_cent*wave + scalesubjtotalvol*wave + 
-                         (1 + wave|site_id/id), 
-                       data = pfactor_red, 
-                       control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-summary(model_cortvol)
-confint(model_cortvol)
-
-model_subcort <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
-                             scalesite_subcort_vol_cent + scalesubjsubcort_vol + scalesite_subcort_vol_cent*wave + scalesubjsubcort_vol*wave +
-                             (1 + wave|site_id/id), 
-                           data = pfactor_red, 
-                           control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-summary(model_subcort)
-confint(model_subcort)
-
-model_area <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
-                          scalesite_totalarea_cent + scalesubjtotalarea + scalesite_totalarea_cent*wave + scalesubjtotalarea*wave +
-                          (1 + wave|site_id/id), 
-                        data = pfactor_red, 
-                        control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-summary(model_area)
-confint(model_area)
-
-model_ct <- lmer(scaleint ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma + 
-                        scalesite_meanct_cent + scalesubjmeanct + scalesite_meanct_cent*wave + scalesubjmeanct*wave + 
+model_cortvol <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma + 
+                        scalesite_totalvol_cent + scalesubjtotalvol + scalesite_totalvol_cent*wave + scalesubjtotalvol*wave +
                         (1 + wave|site_id/id), 
                       data = pfactor_red, 
                       control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
+summary(model_cortvol)
+confint(model_cortvol)
+
+model_subcort <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma + 
+                        scalesite_subcort_vol_cent + scalesubjsubcort_vol + scalesite_subcort_vol_cent*wave + scalesubjsubcort_vol*wave +
+                        (1 + wave|site_id/id), 
+                      data = pfactor_red, 
+                      control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
+summary(model_subcort)
+confint(model_subcort)
+
+model_area <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
+                     scalesite_totalarea_cent + scalesubjtotalarea + scalesite_totalarea_cent*wave + scalesubjtotalarea*wave +
+                     (1 + wave|site_id/id), 
+                   data = pfactor_red, 
+                   control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
+summary(model_area)
+confint(model_area)
+
+model_ct <- lmer(scaleint ~ wave + sex + age + achieva + discovery + ingenia + prisma + 
+                   scalesite_meanct_cent + scalesubjmeanct + scalesite_meanct_cent*wave + scalesubjmeanct*wave + 
+                   (1 + wave|site_id/id), 
+                 data = pfactor_red, 
+                 control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
 summary(model_ct)
 confint(model_ct)
 
@@ -462,6 +478,184 @@ interact_plot(model_ct, pred = wave, modx = scalesubjmeanct,
               modx.labels = c("1 SD Below Mean","Mean","1 SD Above Mean"),
               legend.main = "Mean Cortical Thickness",
               x.label = "Wave", y.label = "Internalizing Factor Scores")
+
+ggsave("figure1.tiff", dpi=300)
+dev.off()
+
+#Follow-up tests of relations between global brain structure and psychopathology factors at waves 2 and 3
+c1 <- c(0,0,0,0,0,0,0,0,0,1,0,1)
+c2 <- c(0,0,0,0,0,0,0,0,0,1,0,2)
+a <- glht(model_cortvol, linfct = rbind(c1, c2))
+summary(a, test=adjusted('none'))
+confint(a)
+
+b <- glht(model_subcort, linfct = rbind(c1, c2))
+summary(b, test=adjusted('none'))
+confint(b)
+
+c <- glht(model_area, linfct = rbind(c1, c2))
+summary(c, test=adjusted('none'))
+confint(c)
+
+#save site-level effects (Table S5)
+wholebrainst_site <- data.frame(x=c("CT_int","CT_sl","SA_int","SA_sl","cortvol_int","cortvol_sl","subcortvol_int","subcortvol_sl"))
+for (i in 424:429){ # columns are factor scores
+  CT_intb <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma + 
+                            site_meanct_cent + scalesubjmeanct + site_meanct_cent*wave + scalesubjmeanct*wave +
+                            (1 + wave|site_id/id), #random intercept and slope for subject and site 
+                          data = pfactor_red, 
+                          control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[9,1]
+  CT_slb <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma + 
+                           site_meanct_cent + scalesubjmeanct + site_meanct_cent*wave + scalesubjmeanct*wave +
+                           (1 + wave|site_id/id), 
+                         data = pfactor_red, 
+                         control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[11,1]
+  CT_intse <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma + 
+                             site_meanct_cent + scalesubjmeanct + site_meanct_cent*wave + scalesubjmeanct*wave + 
+                             (1 + wave|site_id/id), 
+                           data = pfactor_red, 
+                           control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[9,2]
+  CT_slse <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma + 
+                            site_meanct_cent + scalesubjmeanct + site_meanct_cent*wave + scalesubjmeanct*wave + 
+                            (1 + wave|site_id/id), 
+                          data = pfactor_red, 
+                          control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[11,2]
+  CT_intp <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma + 
+                            site_meanct_cent + scalesubjmeanct + site_meanct_cent*wave + scalesubjmeanct*wave + 
+                            (1 + wave|site_id/id), 
+                          data = pfactor_red, 
+                          control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[9,5]
+  CT_slp <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma + 
+                           site_meanct_cent + scalesubjmeanct + site_meanct_cent*wave + scalesubjmeanct*wave + 
+                           (1 + wave|site_id/id), 
+                         data = pfactor_red, 
+                         control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[11,5]
+  SA_intb <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma + 
+                            site_totalarea_cent + scalesubjtotalarea + site_totalarea_cent*wave + scalesubjtotalarea*wave + 
+                            (1 + wave|site_id/id), 
+                          data = pfactor_red, 
+                          control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[9,1]
+  SA_slb <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma + 
+                           site_totalarea_cent + scalesubjtotalarea + site_totalarea_cent*wave + scalesubjtotalarea*wave + 
+                           (1 + wave|site_id/id), 
+                         data = pfactor_red, 
+                         control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[11,1]
+  SA_intse <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma + 
+                             site_totalarea_cent + scalesubjtotalarea + site_totalarea_cent*wave + scalesubjtotalarea*wave +
+                             (1 + wave|site_id/id), 
+                           data = pfactor_red, 
+                           control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[9,2]
+  SA_slse <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma + 
+                            site_totalarea_cent + scalesubjtotalarea + site_totalarea_cent*wave + scalesubjtotalarea*wave +
+                            (1 + wave|site_id/id), 
+                          data = pfactor_red, 
+                          control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[11,2]
+  SA_intp <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma + 
+                            site_totalarea_cent + scalesubjtotalarea + site_totalarea_cent*wave + scalesubjtotalarea*wave +
+                            (1 + wave|site_id/id), 
+                          data = pfactor_red, 
+                          control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[9,5]
+  SA_slp <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma + 
+                           site_totalarea_cent + scalesubjtotalarea + site_totalarea_cent*wave + scalesubjtotalarea*wave + 
+                           (1 + wave|site_id/id), 
+                         data = pfactor_red, 
+                         control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[11,5]
+  cortvol_intb <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma + 
+                                 site_totalvol_cent + scalesubjtotalvol + site_totalvol_cent*wave + scalesubjtotalvol*wave + 
+                                 (1 + wave|site_id/id), 
+                               data = pfactor_red, 
+                               control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[9,1]
+  cortvol_slb <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma + 
+                                site_totalvol_cent + scalesubjtotalvol + site_totalvol_cent*wave + scalesubjtotalvol*wave + 
+                                (1 + wave|site_id/id), 
+                              data = pfactor_red, 
+                              control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[11,1]
+  cortvol_intse <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma + 
+                                  site_totalvol_cent + scalesubjtotalvol + site_totalvol_cent*wave + scalesubjtotalvol*wave + 
+                                  (1 + wave|site_id/id), 
+                                data = pfactor_red, 
+                                control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[9,2]
+  cortvol_slse <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma + 
+                                 site_totalvol_cent + scalesubjtotalvol + site_totalvol_cent*wave + scalesubjtotalvol*wave + 
+                                 (1 + wave|site_id/id), 
+                               data = pfactor_red, 
+                               control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[11,2]
+  cortvol_intp <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma + 
+                                 site_totalvol_cent + scalesubjtotalvol + site_totalvol_cent*wave + scalesubjtotalvol*wave + 
+                                 (1 + wave|site_id/id), 
+                               data = pfactor_red, 
+                               control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[9,5]
+  cortvol_slp <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma + 
+                                site_totalvol_cent + scalesubjtotalvol + site_totalvol_cent*wave + scalesubjtotalvol*wave + 
+                                (1 + wave|site_id/id), 
+                              data = pfactor_red, 
+                              control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[11,5]
+  subcortvol_intb <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma + 
+                                    site_subcort_vol_cent + scalesubjsubcort_vol + site_subcort_vol_cent*wave + scalesubjsubcort_vol*wave + 
+                                    (1 + wave|site_id/id), 
+                                  data = pfactor_red, 
+                                  control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[9,1]
+  subcortvol_slb <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma + 
+                                   site_subcort_vol_cent + scalesubjsubcort_vol + site_subcort_vol_cent*wave + scalesubjsubcort_vol*wave +
+                                   (1 + wave|site_id/id), 
+                                 data = pfactor_red, 
+                                 control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[11,1]
+  subcortvol_intse <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma + 
+                                     site_subcort_vol_cent + scalesubjsubcort_vol + site_subcort_vol_cent*wave + scalesubjsubcort_vol*wave +
+                                     (1 + wave|site_id/id), 
+                                   data = pfactor_red, 
+                                   control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[9,2]
+  subcortvol_slse <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma + 
+                                    site_subcort_vol_cent + scalesubjsubcort_vol + site_subcort_vol_cent*wave + scalesubjsubcort_vol*wave +
+                                    (1 + wave|site_id/id), 
+                                  data = pfactor_red, 
+                                  control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[11,2]
+  subcortvol_intp <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma +
+                                    site_subcort_vol_cent + scalesubjsubcort_vol + site_subcort_vol_cent*wave + scalesubjsubcort_vol*wave + 
+                                    (1 + wave|site_id/id), 
+                                  data = pfactor_red, 
+                                  control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[9,5]
+  subcortvol_slp <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma +
+                                   site_subcort_vol_cent + scalesubjsubcort_vol + site_subcort_vol_cent*wave + scalesubjsubcort_vol*wave + 
+                                   (1 + wave|site_id/id), 
+                                 data = pfactor_red, 
+                                 control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[11,5]
+  newb <- c(CT_intb,CT_slb,SA_intb,SA_slb,cortvol_intb,cortvol_slb,subcortvol_intb,subcortvol_slb)
+  wholebrainst_site <- cbind(wholebrainst_site,newb)
+  names(wholebrainst_site)[ncol(wholebrainst_site)] <- names(pfactor_red)[i]
+  newse <- c(CT_intse,CT_slse,SA_intse,SA_slse,cortvol_intse,cortvol_slse,subcortvol_intse,subcortvol_slse)
+  wholebrainst_site <- cbind(wholebrainst_site,newse)
+  names(wholebrainst_site)[ncol(wholebrainst_site)] <- names(pfactor_red)[i]
+  newp <- c(CT_intp,CT_slp,SA_intp,SA_slp,cortvol_intp,cortvol_slp,subcortvol_intp,subcortvol_slp)
+  wholebrainst_site <- cbind(wholebrainst_site,newp)
+  names(wholebrainst_site)[ncol(wholebrainst_site)] <- names(pfactor_red)[i]
+}
+wholebrainst_site
+
+names(wholebrainst_site) <- c("x","p_beta","p_se","p_pval","ext_beta","ext_se","ext_pval","int_beta","int_se","int_pval",
+                         "nd_beta","nd_se","nd_pval","som_beta","som_se","som_pval","det_beta","det_se","det_pval")
+
+#calculate 95% CIs and create lower and upper bound variables 
+wholebrainst_site$ci_lower_p <- wholebrainst_site$p_beta - 1.96*wholebrainst_site$p_se 
+wholebrainst_site$ci_upper_p <- wholebrainst_site$p_beta + 1.96*wholebrainst_site$p_se 
+wholebrainst_site$ci_lower_ext <- wholebrainst_site$ext_beta - 1.96*wholebrainst_site$ext_se 
+wholebrainst_site$ci_upper_ext <- wholebrainst_site$ext_beta + 1.96*wholebrainst_site$ext_se 
+wholebrainst_site$ci_lower_int <- wholebrainst_site$int_beta - 1.96*wholebrainst_site$int_se 
+wholebrainst_site$ci_upper_int <- wholebrainst_site$int_beta + 1.96*wholebrainst_site$int_se 
+wholebrainst_site$ci_lower_nd <- wholebrainst_site$nd_beta - 1.96*wholebrainst_site$nd_se 
+wholebrainst_site$ci_upper_nd <- wholebrainst_site$nd_beta + 1.96*wholebrainst_site$nd_se 
+wholebrainst_site$ci_lower_som <- wholebrainst_site$som_beta - 1.96*wholebrainst_site$som_se 
+wholebrainst_site$ci_upper_som <- wholebrainst_site$som_beta + 1.96*wholebrainst_site$som_se
+wholebrainst_site$ci_lower_det <- wholebrainst_site$det_beta - 1.96*wholebrainst_site$det_se 
+wholebrainst_site$ci_upper_det <- wholebrainst_site$det_beta + 1.96*wholebrainst_site$det_se
+
+write.csv(wholebrainst_site, "Global Structure MLM Analysis Output Standardized for TableS5_site.csv") #write csv file
+
+#FDR correction
+pval_site <- dplyr::select(wholebrainst_site, c("p_pval","ext_pval","int_pval","nd_pval","som_pval","det_pval"))
+pval_site_fdr <- transform(pval_site, adj.p = p.adjust(as.matrix(pval_site),method = "BH"))
+sum(pval_site_fdr$adj.p<0.05) #1 survived FDR correction for the 48 tests
+write.csv(pval_site_fdr, "FDR adjusted pvalues_global structure analysis_site.csv")
 
 ##Parcel-wise analyses
 
@@ -885,6 +1079,7 @@ groupmeans_thick$site_tmpolerh_thick_cent <- groupmeans_thick$site_tmpolerh_thic
 groupmeans_thick$site_trvtmrh_thick_cent <- groupmeans_thick$site_trvtmrh_thick - mean(groupmeans_thick$site_trvtmrh_thick)
 groupmeans_thick$site_insularh_thick_cent <- groupmeans_thick$site_insularh_thick - mean(groupmeans_thick$site_insularh_thick)
 
+#Centering parcel-wise brain area predictors
 groupmeans_area <- aggregate(cbind(banksstslh_area,cdacatelh_area,cdmdfrlh_area,cuneuslh_area,ehinallh_area,
                                    fusiformlh_area,ifpllh_area,iftmlh_area,ihcatelh_area,locclh_area,
                                    lobfrlh_area,linguallh_area,mobfrlh_area,mdtmlh_area,parahpallh_area,
@@ -1154,6 +1349,7 @@ pfactor_red$subj_tmpolerh_thick <- pfactor_red$tmpolerh_thick - pfactor_red$site
 pfactor_red$subj_trvtmrh_thick <- pfactor_red$trvtmrh_thick - pfactor_red$site_trvtmrh_thick
 pfactor_red$subj_insularh_thick <- pfactor_red$insularh_thick - pfactor_red$site_insularh_thick
 
+#Create subject-centered area variables
 pfactor_red$subj_banksstslh_area <- pfactor_red$banksstslh_area - pfactor_red$site_banksstslh_area
 pfactor_red$subj_cdacatelh_area <- pfactor_red$cdacatelh_area - pfactor_red$site_cdacatelh_area
 pfactor_red$subj_cdmdfrlh_area <- pfactor_red$cdmdfrlh_area - pfactor_red$site_cdmdfrlh_area
@@ -1244,830 +1440,623 @@ pfactor_red$subj_amygdalarh_vol <- pfactor_red$amygdalarh_vol - pfactor_red$site
 pfactor_red$subj_aar_vol <- pfactor_red$aar_vol - pfactor_red$site_aar_vol
 pfactor_red$subj_vedcrh_vol <- pfactor_red$vedcrh_vol - pfactor_red$site_vedcrh_vol
 
-write.csv(pfactor_red, "abcd_mlm_centered_vars_long_rel4_FINAL.csv") #write csv file
+#Parcel-wise cortical volume analyses (68 cortical volume parcels)
+#conditional three-level growth model with cortical volume parcels predicting p factor scores 
+#covariates: sex, age, scanner model dummies
+#standardized betas, standard errors, and p-values for intercepts were saved in a csv file
+#follow-up analysis was conducted with wb_cort_vol (total cortical volume) included as an additional covariate 
 
-
-#Parcel-wise cortical volume analyses (68 cortical volume and area parcels, 19 subcortical volume parcels)
-#conditional three-level growth model with parcel-wise structure measures predicting the psychopathology factor scores (looped) 
-#covariates: sex, age, race/ethnicity dummies, scanner model dummies
-#standardized betas, standard errors, and p-values for intercepts (i.e., intb, intse, intp) and slopes (i.e., slb, slse, slp) were saved in a csv file
-
-vol1 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+vol1 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                site_banksstslh_vol_cent + scale(subj_banksstslh_vol) + site_banksstslh_vol_cent*wave + scale(subj_banksstslh_vol)*wave +
                (1 + wave|site_id/id), 
              data = pfactor_red, 
              control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-vol_b1i <- as.data.frame(c(summary(vol1)$coefficients[14,1]))
-vol_se1i <- as.data.frame(c(summary(vol1)$coefficients[14,2]))
-vol_p1i <- as.data.frame(c(summary(vol1)$coefficients[14,5]))
-vol_b1s <- as.data.frame(c(summary(vol1)$coefficients[16,1]))
-vol_se1s <- as.data.frame(c(summary(vol1)$coefficients[16,2]))
-vol_p1s <- as.data.frame(c(summary(vol1)$coefficients[16,5]))
+vol_b1i <- as.data.frame(c(summary(vol1)$coefficients[10,1]))
+vol_se1i <- as.data.frame(c(summary(vol1)$coefficients[10,2]))
+vol_p1i <- as.data.frame(c(summary(vol1)$coefficients[10,5]))
 
-vol2 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+vol2 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                site_cdacatelh_vol_cent + scale(subj_cdacatelh_vol) + site_cdacatelh_vol_cent*wave + scale(subj_cdacatelh_vol)*wave +
                (1 + wave|site_id/id), 
              data = pfactor_red, 
              control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-vol_b2i <- as.data.frame(c(summary(vol2)$coefficients[14,1]))
-vol_se2i <- as.data.frame(c(summary(vol2)$coefficients[14,2]))
-vol_p2i <- as.data.frame(c(summary(vol2)$coefficients[14,5]))
-vol_b2s <- as.data.frame(c(summary(vol2)$coefficients[16,1]))
-vol_se2s <- as.data.frame(c(summary(vol2)$coefficients[16,2]))
-vol_p2s <- as.data.frame(c(summary(vol2)$coefficients[16,5]))
+vol_b2i <- as.data.frame(c(summary(vol2)$coefficients[10,1]))
+vol_se2i <- as.data.frame(c(summary(vol2)$coefficients[10,2]))
+vol_p2i <- as.data.frame(c(summary(vol2)$coefficients[10,5]))
 
-vol3 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+vol3 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                site_cdmdfrlh_vol_cent + scale(subj_cdmdfrlh_vol) + site_cdmdfrlh_vol_cent*wave + scale(subj_cdmdfrlh_vol)*wave +
                (1 + wave|site_id/id), 
              data = pfactor_red, 
              control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-vol_b3i <- as.data.frame(c(summary(vol3)$coefficients[14,1]))
-vol_se3i <- as.data.frame(c(summary(vol3)$coefficients[14,2]))
-vol_p3i <- as.data.frame(c(summary(vol3)$coefficients[14,5]))
-vol_b3s <- as.data.frame(c(summary(vol3)$coefficients[16,1]))
-vol_se3s <- as.data.frame(c(summary(vol3)$coefficients[16,2]))
-vol_p3s <- as.data.frame(c(summary(vol3)$coefficients[16,5]))
+vol_b3i <- as.data.frame(c(summary(vol3)$coefficients[10,1]))
+vol_se3i <- as.data.frame(c(summary(vol3)$coefficients[10,2]))
+vol_p3i <- as.data.frame(c(summary(vol3)$coefficients[10,5]))
 
-vol4 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+vol4 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                site_cuneuslh_vol_cent + scale(subj_cuneuslh_vol) + site_cuneuslh_vol_cent*wave + scale(subj_cuneuslh_vol)*wave +
                (1 + wave|site_id/id), 
              data = pfactor_red, 
              control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-vol_b4i <- as.data.frame(c(summary(vol4)$coefficients[14,1]))
-vol_se4i <- as.data.frame(c(summary(vol4)$coefficients[14,2]))
-vol_p4i <- as.data.frame(c(summary(vol4)$coefficients[14,5]))
-vol_b4s <- as.data.frame(c(summary(vol4)$coefficients[16,1]))
-vol_se4s <- as.data.frame(c(summary(vol4)$coefficients[16,2]))
-vol_p4s <- as.data.frame(c(summary(vol4)$coefficients[16,5]))
+vol_b4i <- as.data.frame(c(summary(vol4)$coefficients[10,1]))
+vol_se4i <- as.data.frame(c(summary(vol4)$coefficients[10,2]))
+vol_p4i <- as.data.frame(c(summary(vol4)$coefficients[10,5]))
 
-vol5 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+vol5 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                site_ehinallh_vol_cent + scale(subj_ehinallh_vol) + site_ehinallh_vol_cent*wave + scale(subj_ehinallh_vol)*wave +
                (1 + wave|site_id/id), 
              data = pfactor_red, 
              control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-vol_b5i <- as.data.frame(c(summary(vol5)$coefficients[14,1]))
-vol_se5i <- as.data.frame(c(summary(vol5)$coefficients[14,2]))
-vol_p5i <- as.data.frame(c(summary(vol5)$coefficients[14,5]))
-vol_b5s <- as.data.frame(c(summary(vol5)$coefficients[16,1]))
-vol_se5s <- as.data.frame(c(summary(vol5)$coefficients[16,2]))
-vol_p5s <- as.data.frame(c(summary(vol5)$coefficients[16,5]))
+vol_b5i <- as.data.frame(c(summary(vol5)$coefficients[10,1]))
+vol_se5i <- as.data.frame(c(summary(vol5)$coefficients[10,2]))
+vol_p5i <- as.data.frame(c(summary(vol5)$coefficients[10,5]))
 
-vol6 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+vol6 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                site_fusiformlh_vol_cent + scale(subj_fusiformlh_vol) + site_fusiformlh_vol_cent*wave + scale(subj_fusiformlh_vol)*wave +
                (1 + wave|site_id/id), 
              data = pfactor_red, 
              control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-vol_b6i <- as.data.frame(c(summary(vol6)$coefficients[14,1]))
-vol_se6i <- as.data.frame(c(summary(vol6)$coefficients[14,2]))
-vol_p6i <- as.data.frame(c(summary(vol6)$coefficients[14,5]))
-vol_b6s <- as.data.frame(c(summary(vol6)$coefficients[16,1]))
-vol_se6s <- as.data.frame(c(summary(vol6)$coefficients[16,2]))
-vol_p6s <- as.data.frame(c(summary(vol6)$coefficients[16,5]))
+vol_b6i <- as.data.frame(c(summary(vol6)$coefficients[10,1]))
+vol_se6i <- as.data.frame(c(summary(vol6)$coefficients[10,2]))
+vol_p6i <- as.data.frame(c(summary(vol6)$coefficients[10,5]))
 
-vol7 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+vol7 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                site_ifpllh_vol_cent + scale(subj_ifpllh_vol) + site_ifpllh_vol_cent*wave + scale(subj_ifpllh_vol)*wave +
                (1 + wave|site_id/id), 
              data = pfactor_red, 
              control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-vol_b7i <- as.data.frame(c(summary(vol7)$coefficients[14,1]))
-vol_se7i <- as.data.frame(c(summary(vol7)$coefficients[14,2]))
-vol_p7i <- as.data.frame(c(summary(vol7)$coefficients[14,5]))
-vol_b7s <- as.data.frame(c(summary(vol7)$coefficients[16,1]))
-vol_se7s <- as.data.frame(c(summary(vol7)$coefficients[16,2]))
-vol_p7s <- as.data.frame(c(summary(vol7)$coefficients[16,5]))
+vol_b7i <- as.data.frame(c(summary(vol7)$coefficients[10,1]))
+vol_se7i <- as.data.frame(c(summary(vol7)$coefficients[10,2]))
+vol_p7i <- as.data.frame(c(summary(vol7)$coefficients[10,5]))
 
-vol8 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+vol8 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                site_iftmlh_vol_cent + scale(subj_iftmlh_vol) + site_iftmlh_vol_cent*wave + scale(subj_iftmlh_vol)*wave +
                (1 + wave|site_id/id), 
              data = pfactor_red, 
              control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-vol_b8i <- as.data.frame(c(summary(vol8)$coefficients[14,1]))
-vol_se8i <- as.data.frame(c(summary(vol8)$coefficients[14,2]))
-vol_p8i <- as.data.frame(c(summary(vol8)$coefficients[14,5]))
-vol_b8s <- as.data.frame(c(summary(vol8)$coefficients[16,1]))
-vol_se8s <- as.data.frame(c(summary(vol8)$coefficients[16,2]))
-vol_p8s <- as.data.frame(c(summary(vol8)$coefficients[16,5]))
+vol_b8i <- as.data.frame(c(summary(vol8)$coefficients[10,1]))
+vol_se8i <- as.data.frame(c(summary(vol8)$coefficients[10,2]))
+vol_p8i <- as.data.frame(c(summary(vol8)$coefficients[10,5]))
 
-vol9 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+vol9 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                site_ihcatelh_vol_cent + scale(subj_ihcatelh_vol) + site_ihcatelh_vol_cent*wave + scale(subj_ihcatelh_vol)*wave +
                (1 + wave|site_id/id), 
              data = pfactor_red, 
              control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-vol_b9i <- as.data.frame(c(summary(vol9)$coefficients[14,1]))
-vol_se9i <- as.data.frame(c(summary(vol9)$coefficients[14,2]))
-vol_p9i <- as.data.frame(c(summary(vol9)$coefficients[14,5]))
-vol_b9s <- as.data.frame(c(summary(vol9)$coefficients[16,1]))
-vol_se9s <- as.data.frame(c(summary(vol9)$coefficients[16,2]))
-vol_p9s <- as.data.frame(c(summary(vol9)$coefficients[16,5]))
+vol_b9i <- as.data.frame(c(summary(vol9)$coefficients[10,1]))
+vol_se9i <- as.data.frame(c(summary(vol9)$coefficients[10,2]))
+vol_p9i <- as.data.frame(c(summary(vol9)$coefficients[10,5]))
 
-vol10 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+vol10 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                 site_locclh_vol_cent + scale(subj_locclh_vol) + site_locclh_vol_cent*wave + scale(subj_locclh_vol)*wave +
                 (1 + wave|site_id/id), 
               data = pfactor_red, 
               control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-vol_b10i <- as.data.frame(c(summary(vol10)$coefficients[14,1]))
-vol_se10i <- as.data.frame(c(summary(vol10)$coefficients[14,2]))
-vol_p10i <- as.data.frame(c(summary(vol10)$coefficients[14,5]))
-vol_b10s <- as.data.frame(c(summary(vol10)$coefficients[16,1]))
-vol_se10s <- as.data.frame(c(summary(vol10)$coefficients[16,2]))
-vol_p10s <- as.data.frame(c(summary(vol10)$coefficients[16,5]))
+vol_b10i <- as.data.frame(c(summary(vol10)$coefficients[10,1]))
+vol_se10i <- as.data.frame(c(summary(vol10)$coefficients[10,2]))
+vol_p10i <- as.data.frame(c(summary(vol10)$coefficients[10,5]))
 
-vol11 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+vol11 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                 site_lobfrlh_vol_cent + scale(subj_lobfrlh_vol) + site_lobfrlh_vol_cent*wave + scale(subj_lobfrlh_vol)*wave +
                 (1 + wave|site_id/id), 
               data = pfactor_red, 
               control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-vol_b11i <- as.data.frame(c(summary(vol11)$coefficients[14,1]))
-vol_se11i <- as.data.frame(c(summary(vol11)$coefficients[14,2]))
-vol_p11i <- as.data.frame(c(summary(vol11)$coefficients[14,5]))
-vol_b11s <- as.data.frame(c(summary(vol11)$coefficients[16,1]))
-vol_se11s <- as.data.frame(c(summary(vol11)$coefficients[16,2]))
-vol_p11s <- as.data.frame(c(summary(vol11)$coefficients[16,5]))
+vol_b11i <- as.data.frame(c(summary(vol11)$coefficients[10,1]))
+vol_se11i <- as.data.frame(c(summary(vol11)$coefficients[10,2]))
+vol_p11i <- as.data.frame(c(summary(vol11)$coefficients[10,5]))
 
-vol12 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+vol12 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                 site_linguallh_vol_cent + scale(subj_linguallh_vol) + site_linguallh_vol_cent*wave + scale(subj_linguallh_vol)*wave +
                 (1 + wave|site_id/id), 
               data = pfactor_red, 
               control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-vol_b12i <- as.data.frame(c(summary(vol12)$coefficients[14,1]))
-vol_se12i <- as.data.frame(c(summary(vol12)$coefficients[14,2]))
-vol_p12i <- as.data.frame(c(summary(vol12)$coefficients[14,5]))
-vol_b12s <- as.data.frame(c(summary(vol12)$coefficients[16,1]))
-vol_se12s <- as.data.frame(c(summary(vol12)$coefficients[16,2]))
-vol_p12s <- as.data.frame(c(summary(vol12)$coefficients[16,5]))
+vol_b12i <- as.data.frame(c(summary(vol12)$coefficients[10,1]))
+vol_se12i <- as.data.frame(c(summary(vol12)$coefficients[10,2]))
+vol_p12i <- as.data.frame(c(summary(vol12)$coefficients[10,5]))
 
-vol13 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+vol13 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                 site_mobfrlh_vol_cent + scale(subj_mobfrlh_vol) + site_mobfrlh_vol_cent*wave + scale(subj_mobfrlh_vol)*wave +
                 (1 + wave|site_id/id), 
               data = pfactor_red, 
               control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-vol_b13i <- as.data.frame(c(summary(vol13)$coefficients[14,1]))
-vol_se13i <- as.data.frame(c(summary(vol13)$coefficients[14,2]))
-vol_p13i <- as.data.frame(c(summary(vol13)$coefficients[14,5]))
-vol_b13s <- as.data.frame(c(summary(vol13)$coefficients[16,1]))
-vol_se13s <- as.data.frame(c(summary(vol13)$coefficients[16,2]))
-vol_p13s <- as.data.frame(c(summary(vol13)$coefficients[16,5]))
+vol_b13i <- as.data.frame(c(summary(vol13)$coefficients[10,1]))
+vol_se13i <- as.data.frame(c(summary(vol13)$coefficients[10,2]))
+vol_p13i <- as.data.frame(c(summary(vol13)$coefficients[10,5]))
 
-vol14 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+vol14 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                 site_mdtmlh_vol_cent + scale(subj_mdtmlh_vol) + site_mdtmlh_vol_cent*wave + scale(subj_mdtmlh_vol)*wave +
                 (1 + wave|site_id/id), 
               data = pfactor_red, 
               control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-vol_b14i <- as.data.frame(c(summary(vol14)$coefficients[14,1]))
-vol_se14i <- as.data.frame(c(summary(vol14)$coefficients[14,2]))
-vol_p14i <- as.data.frame(c(summary(vol14)$coefficients[14,5]))
-vol_b14s <- as.data.frame(c(summary(vol14)$coefficients[16,1]))
-vol_se14s <- as.data.frame(c(summary(vol14)$coefficients[16,2]))
-vol_p14s <- as.data.frame(c(summary(vol14)$coefficients[16,5]))
+vol_b14i <- as.data.frame(c(summary(vol14)$coefficients[10,1]))
+vol_se14i <- as.data.frame(c(summary(vol14)$coefficients[10,2]))
+vol_p14i <- as.data.frame(c(summary(vol14)$coefficients[10,5]))
 
-vol15 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+vol15 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                 site_parahpallh_vol_cent + scale(subj_parahpallh_vol) + site_parahpallh_vol_cent*wave + scale(subj_parahpallh_vol)*wave +
                 (1 + wave|site_id/id), 
               data = pfactor_red, 
               control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-vol_b15i <- as.data.frame(c(summary(vol15)$coefficients[14,1]))
-vol_se15i <- as.data.frame(c(summary(vol15)$coefficients[14,2]))
-vol_p15i <- as.data.frame(c(summary(vol15)$coefficients[14,5]))
-vol_b15s <- as.data.frame(c(summary(vol15)$coefficients[16,1]))
-vol_se15s <- as.data.frame(c(summary(vol15)$coefficients[16,2]))
-vol_p15s <- as.data.frame(c(summary(vol15)$coefficients[16,5]))
+vol_b15i <- as.data.frame(c(summary(vol15)$coefficients[10,1]))
+vol_se15i <- as.data.frame(c(summary(vol15)$coefficients[10,2]))
+vol_p15i <- as.data.frame(c(summary(vol15)$coefficients[10,5]))
 
-vol16 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+vol16 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                 site_paracnlh_vol_cent + scale(subj_paracnlh_vol) + site_paracnlh_vol_cent*wave + scale(subj_paracnlh_vol)*wave +
                 (1 + wave|site_id/id), 
               data = pfactor_red, 
               control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-vol_b16i <- as.data.frame(c(summary(vol16)$coefficients[14,1]))
-vol_se16i <- as.data.frame(c(summary(vol16)$coefficients[14,2]))
-vol_p16i <- as.data.frame(c(summary(vol16)$coefficients[14,5]))
-vol_b16s <- as.data.frame(c(summary(vol16)$coefficients[16,1]))
-vol_se16s <- as.data.frame(c(summary(vol16)$coefficients[16,2]))
-vol_p16s <- as.data.frame(c(summary(vol16)$coefficients[16,5]))
+vol_b16i <- as.data.frame(c(summary(vol16)$coefficients[10,1]))
+vol_se16i <- as.data.frame(c(summary(vol16)$coefficients[10,2]))
+vol_p16i <- as.data.frame(c(summary(vol16)$coefficients[10,5]))
 
-vol17 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+vol17 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                 site_parsopclh_vol_cent + scale(subj_parsopclh_vol) + site_parsopclh_vol_cent*wave + scale(subj_parsopclh_vol)*wave +
                 (1 + wave|site_id/id), 
               data = pfactor_red, 
               control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-vol_b17i <- as.data.frame(c(summary(vol17)$coefficients[14,1]))
-vol_se17i <- as.data.frame(c(summary(vol17)$coefficients[14,2]))
-vol_p17i <- as.data.frame(c(summary(vol17)$coefficients[14,5]))
-vol_b17s <- as.data.frame(c(summary(vol17)$coefficients[16,1]))
-vol_se17s <- as.data.frame(c(summary(vol17)$coefficients[16,2]))
-vol_p17s <- as.data.frame(c(summary(vol17)$coefficients[16,5]))
+vol_b17i <- as.data.frame(c(summary(vol17)$coefficients[10,1]))
+vol_se17i <- as.data.frame(c(summary(vol17)$coefficients[10,2]))
+vol_p17i <- as.data.frame(c(summary(vol17)$coefficients[10,5]))
 
-vol18 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+vol18 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                 site_parsobislh_vol_cent + scale(subj_parsobislh_vol) + site_parsobislh_vol_cent*wave + scale(subj_parsobislh_vol)*wave +
                 (1 + wave|site_id/id), 
               data = pfactor_red, 
               control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-vol_b18i <- as.data.frame(c(summary(vol18)$coefficients[14,1]))
-vol_se18i <- as.data.frame(c(summary(vol18)$coefficients[14,2]))
-vol_p18i <- as.data.frame(c(summary(vol18)$coefficients[14,5]))
-vol_b18s <- as.data.frame(c(summary(vol18)$coefficients[16,1]))
-vol_se18s <- as.data.frame(c(summary(vol18)$coefficients[16,2]))
-vol_p18s <- as.data.frame(c(summary(vol18)$coefficients[16,5]))
+vol_b18i <- as.data.frame(c(summary(vol18)$coefficients[10,1]))
+vol_se18i <- as.data.frame(c(summary(vol18)$coefficients[10,2]))
+vol_p18i <- as.data.frame(c(summary(vol18)$coefficients[10,5]))
 
-vol19 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+vol19 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                 site_parstgrislh_vol_cent + scale(subj_parstgrislh_vol) + site_parstgrislh_vol_cent*wave + scale(subj_parstgrislh_vol)*wave +
                 (1 + wave|site_id/id), 
               data = pfactor_red, 
               control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-vol_b19i <- as.data.frame(c(summary(vol19)$coefficients[14,1]))
-vol_se19i <- as.data.frame(c(summary(vol19)$coefficients[14,2]))
-vol_p19i <- as.data.frame(c(summary(vol19)$coefficients[14,5]))
-vol_b19s <- as.data.frame(c(summary(vol19)$coefficients[16,1]))
-vol_se19s <- as.data.frame(c(summary(vol19)$coefficients[16,2]))
-vol_p19s <- as.data.frame(c(summary(vol19)$coefficients[16,5]))
+vol_b19i <- as.data.frame(c(summary(vol19)$coefficients[10,1]))
+vol_se19i <- as.data.frame(c(summary(vol19)$coefficients[10,2]))
+vol_p19i <- as.data.frame(c(summary(vol19)$coefficients[10,5]))
 
-
-vol20 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+vol20 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                 site_pericclh_vol_cent + scale(subj_pericclh_vol) + site_pericclh_vol_cent*wave + scale(subj_pericclh_vol)*wave +
                 (1 + wave|site_id/id), 
               data = pfactor_red, 
               control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-vol_b20i <- as.data.frame(c(summary(vol20)$coefficients[14,1]))
-vol_se20i <- as.data.frame(c(summary(vol20)$coefficients[14,2]))
-vol_p20i <- as.data.frame(c(summary(vol20)$coefficients[14,5]))
-vol_b20s <- as.data.frame(c(summary(vol20)$coefficients[16,1]))
-vol_se20s <- as.data.frame(c(summary(vol20)$coefficients[16,2]))
-vol_p20s <- as.data.frame(c(summary(vol20)$coefficients[16,5]))
+vol_b20i <- as.data.frame(c(summary(vol20)$coefficients[10,1]))
+vol_se20i <- as.data.frame(c(summary(vol20)$coefficients[10,2]))
+vol_p20i <- as.data.frame(c(summary(vol20)$coefficients[10,5]))
 
-vol21 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+vol21 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                 site_postcnlh_vol_cent + scale(subj_postcnlh_vol) + site_postcnlh_vol_cent*wave + scale(subj_postcnlh_vol)*wave +
                 (1 + wave|site_id/id), 
               data = pfactor_red, 
               control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-vol_b21i <- as.data.frame(c(summary(vol21)$coefficients[14,1]))
-vol_se21i <- as.data.frame(c(summary(vol21)$coefficients[14,2]))
-vol_p21i <- as.data.frame(c(summary(vol21)$coefficients[14,5]))
-vol_b21s <- as.data.frame(c(summary(vol21)$coefficients[16,1]))
-vol_se21s <- as.data.frame(c(summary(vol21)$coefficients[16,2]))
-vol_p21s <- as.data.frame(c(summary(vol21)$coefficients[16,5]))
+vol_b21i <- as.data.frame(c(summary(vol21)$coefficients[10,1]))
+vol_se21i <- as.data.frame(c(summary(vol21)$coefficients[10,2]))
+vol_p21i <- as.data.frame(c(summary(vol21)$coefficients[10,5]))
 
-vol22 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+vol22 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                 site_ptcatelh_vol_cent + scale(subj_ptcatelh_vol) + site_ptcatelh_vol_cent*wave + scale(subj_ptcatelh_vol)*wave +
                 (1 + wave|site_id/id), 
               data = pfactor_red, 
               control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-vol_b22i <- as.data.frame(c(summary(vol22)$coefficients[14,1]))
-vol_se22i <- as.data.frame(c(summary(vol22)$coefficients[14,2]))
-vol_p22i <- as.data.frame(c(summary(vol22)$coefficients[14,5]))
-vol_b22s <- as.data.frame(c(summary(vol22)$coefficients[16,1]))
-vol_se22s <- as.data.frame(c(summary(vol22)$coefficients[16,2]))
-vol_p22s <- as.data.frame(c(summary(vol22)$coefficients[16,5]))
+vol_b22i <- as.data.frame(c(summary(vol22)$coefficients[10,1]))
+vol_se22i <- as.data.frame(c(summary(vol22)$coefficients[10,2]))
+vol_p22i <- as.data.frame(c(summary(vol22)$coefficients[10,5]))
 
-vol23 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+vol23 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                 site_precnlh_vol_cent + scale(subj_precnlh_vol) + site_precnlh_vol_cent*wave + scale(subj_precnlh_vol)*wave +
                 (1 + wave|site_id/id), 
               data = pfactor_red, 
               control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-vol_b23i <- as.data.frame(c(summary(vol23)$coefficients[14,1]))
-vol_se23i <- as.data.frame(c(summary(vol23)$coefficients[14,2]))
-vol_p23i <- as.data.frame(c(summary(vol23)$coefficients[14,5]))
-vol_b23s <- as.data.frame(c(summary(vol23)$coefficients[16,1]))
-vol_se23s <- as.data.frame(c(summary(vol23)$coefficients[16,2]))
-vol_p23s <- as.data.frame(c(summary(vol23)$coefficients[16,5]))
+vol_b23i <- as.data.frame(c(summary(vol23)$coefficients[10,1]))
+vol_se23i <- as.data.frame(c(summary(vol23)$coefficients[10,2]))
+vol_p23i <- as.data.frame(c(summary(vol23)$coefficients[10,5]))
 
-vol24 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+vol24 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                 site_pclh_vol_cent + scale(subj_pclh_vol) + site_pclh_vol_cent*wave + scale(subj_pclh_vol)*wave +
                 (1 + wave|site_id/id), 
               data = pfactor_red, 
               control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-vol_b24i <- as.data.frame(c(summary(vol24)$coefficients[14,1]))
-vol_se24i <- as.data.frame(c(summary(vol24)$coefficients[14,2]))
-vol_p24i <- as.data.frame(c(summary(vol24)$coefficients[14,5]))
-vol_b24s <- as.data.frame(c(summary(vol24)$coefficients[16,1]))
-vol_se24s <- as.data.frame(c(summary(vol24)$coefficients[16,2]))
-vol_p24s <- as.data.frame(c(summary(vol24)$coefficients[16,5]))
+vol_b24i <- as.data.frame(c(summary(vol24)$coefficients[10,1]))
+vol_se24i <- as.data.frame(c(summary(vol24)$coefficients[10,2]))
+vol_p24i <- as.data.frame(c(summary(vol24)$coefficients[10,5]))
 
-vol25 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+vol25 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                 site_rracatelh_vol_cent + scale(subj_rracatelh_vol) + site_rracatelh_vol_cent*wave + scale(subj_rracatelh_vol)*wave +
                 (1 + wave|site_id/id), 
               data = pfactor_red, 
               control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-vol_b25i <- as.data.frame(c(summary(vol25)$coefficients[14,1]))
-vol_se25i <- as.data.frame(c(summary(vol25)$coefficients[14,2]))
-vol_p25i <- as.data.frame(c(summary(vol25)$coefficients[14,5]))
-vol_b25s <- as.data.frame(c(summary(vol25)$coefficients[16,1]))
-vol_se25s <- as.data.frame(c(summary(vol25)$coefficients[16,2]))
-vol_p25s <- as.data.frame(c(summary(vol25)$coefficients[16,5]))
+vol_b25i <- as.data.frame(c(summary(vol25)$coefficients[10,1]))
+vol_se25i <- as.data.frame(c(summary(vol25)$coefficients[10,2]))
+vol_p25i <- as.data.frame(c(summary(vol25)$coefficients[10,5]))
 
-vol26 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+vol26 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                 site_rrmdfrlh_vol_cent + scale(subj_rrmdfrlh_vol) + site_rrmdfrlh_vol_cent*wave + scale(subj_rrmdfrlh_vol)*wave +
                 (1 + wave|site_id/id), 
               data = pfactor_red, 
               control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-vol_b26i <- as.data.frame(c(summary(vol26)$coefficients[14,1]))
-vol_se26i <- as.data.frame(c(summary(vol26)$coefficients[14,2]))
-vol_p26i <- as.data.frame(c(summary(vol26)$coefficients[14,5]))
-vol_b26s <- as.data.frame(c(summary(vol26)$coefficients[16,1]))
-vol_se26s <- as.data.frame(c(summary(vol26)$coefficients[16,2]))
-vol_p26s <- as.data.frame(c(summary(vol26)$coefficients[16,5]))
+vol_b26i <- as.data.frame(c(summary(vol26)$coefficients[10,1]))
+vol_se26i <- as.data.frame(c(summary(vol26)$coefficients[10,2]))
+vol_p26i <- as.data.frame(c(summary(vol26)$coefficients[10,5]))
 
-vol27 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+vol27 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                 site_sufrlh_vol_cent + scale(subj_sufrlh_vol) + site_sufrlh_vol_cent*wave + scale(subj_sufrlh_vol)*wave +
                 (1 + wave|site_id/id), 
               data = pfactor_red, 
               control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-vol_b27i <- as.data.frame(c(summary(vol27)$coefficients[14,1]))
-vol_se27i <- as.data.frame(c(summary(vol27)$coefficients[14,2]))
-vol_p27i <- as.data.frame(c(summary(vol27)$coefficients[14,5]))
-vol_b27s <- as.data.frame(c(summary(vol27)$coefficients[16,1]))
-vol_se27s <- as.data.frame(c(summary(vol27)$coefficients[16,2]))
-vol_p27s <- as.data.frame(c(summary(vol27)$coefficients[16,5]))
+vol_b27i <- as.data.frame(c(summary(vol27)$coefficients[10,1]))
+vol_se27i <- as.data.frame(c(summary(vol27)$coefficients[10,2]))
+vol_p27i <- as.data.frame(c(summary(vol27)$coefficients[10,5]))
 
-vol28 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+vol28 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                 site_supllh_vol_cent + scale(subj_supllh_vol) + site_supllh_vol_cent*wave + scale(subj_supllh_vol)*wave +
                 (1 + wave|site_id/id), 
               data = pfactor_red, 
               control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-vol_b28i <- as.data.frame(c(summary(vol28)$coefficients[14,1]))
-vol_se28i <- as.data.frame(c(summary(vol28)$coefficients[14,2]))
-vol_p28i <- as.data.frame(c(summary(vol28)$coefficients[14,5]))
-vol_b28s <- as.data.frame(c(summary(vol28)$coefficients[16,1]))
-vol_se28s <- as.data.frame(c(summary(vol28)$coefficients[16,2]))
-vol_p28s <- as.data.frame(c(summary(vol28)$coefficients[16,5]))
+vol_b28i <- as.data.frame(c(summary(vol28)$coefficients[10,1]))
+vol_se28i <- as.data.frame(c(summary(vol28)$coefficients[10,2]))
+vol_p28i <- as.data.frame(c(summary(vol28)$coefficients[10,5]))
 
-vol29 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+vol29 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                 site_sutmlh_vol_cent + scale(subj_sutmlh_vol) + site_sutmlh_vol_cent*wave + scale(subj_sutmlh_vol)*wave +
                 (1 + wave|site_id/id), 
               data = pfactor_red, 
               control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-vol_b29i <- as.data.frame(c(summary(vol29)$coefficients[14,1]))
-vol_se29i <- as.data.frame(c(summary(vol29)$coefficients[14,2]))
-vol_p29i <- as.data.frame(c(summary(vol29)$coefficients[14,5]))
-vol_b29s <- as.data.frame(c(summary(vol29)$coefficients[16,1]))
-vol_se29s <- as.data.frame(c(summary(vol29)$coefficients[16,2]))
-vol_p29s <- as.data.frame(c(summary(vol29)$coefficients[16,5]))
+vol_b29i <- as.data.frame(c(summary(vol29)$coefficients[10,1]))
+vol_se29i <- as.data.frame(c(summary(vol29)$coefficients[10,2]))
+vol_p29i <- as.data.frame(c(summary(vol29)$coefficients[10,5]))
 
-vol30 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+vol30 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                 site_smlh_vol_cent + scale(subj_smlh_vol) + site_smlh_vol_cent*wave + scale(subj_smlh_vol)*wave +
                 (1 + wave|site_id/id), 
               data = pfactor_red, 
               control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-vol_b30i <- as.data.frame(c(summary(vol30)$coefficients[14,1]))
-vol_se30i <- as.data.frame(c(summary(vol30)$coefficients[14,2]))
-vol_p30i <- as.data.frame(c(summary(vol30)$coefficients[14,5]))
-vol_b30s <- as.data.frame(c(summary(vol30)$coefficients[16,1]))
-vol_se30s <- as.data.frame(c(summary(vol30)$coefficients[16,2]))
-vol_p30s <- as.data.frame(c(summary(vol30)$coefficients[16,5]))
+vol_b30i <- as.data.frame(c(summary(vol30)$coefficients[10,1]))
+vol_se30i <- as.data.frame(c(summary(vol30)$coefficients[10,2]))
+vol_p30i <- as.data.frame(c(summary(vol30)$coefficients[10,5]))
 
-vol31 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+vol31 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                 site_frpolelh_vol_cent + scale(subj_frpolelh_vol) + site_frpolelh_vol_cent*wave + scale(subj_frpolelh_vol)*wave +
                 (1 + wave|site_id/id), 
               data = pfactor_red, 
               control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-vol_b31i <- as.data.frame(c(summary(vol31)$coefficients[14,1]))
-vol_se31i <- as.data.frame(c(summary(vol31)$coefficients[14,2]))
-vol_p31i <- as.data.frame(c(summary(vol31)$coefficients[14,5]))
-vol_b31s <- as.data.frame(c(summary(vol31)$coefficients[16,1]))
-vol_se31s <- as.data.frame(c(summary(vol31)$coefficients[16,2]))
-vol_p31s <- as.data.frame(c(summary(vol31)$coefficients[16,5]))
+vol_b31i <- as.data.frame(c(summary(vol31)$coefficients[10,1]))
+vol_se31i <- as.data.frame(c(summary(vol31)$coefficients[10,2]))
+vol_p31i <- as.data.frame(c(summary(vol31)$coefficients[10,5]))
 
-vol32 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+vol32 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                 site_tmpolelh_vol_cent + scale(subj_tmpolelh_vol) + site_tmpolelh_vol_cent*wave + scale(subj_tmpolelh_vol)*wave +
                 (1 + wave|site_id/id), 
               data = pfactor_red, 
               control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-vol_b32i <- as.data.frame(c(summary(vol32)$coefficients[14,1]))
-vol_se32i <- as.data.frame(c(summary(vol32)$coefficients[14,2]))
-vol_p32i <- as.data.frame(c(summary(vol32)$coefficients[14,5]))
-vol_b32s <- as.data.frame(c(summary(vol32)$coefficients[16,1]))
-vol_se32s <- as.data.frame(c(summary(vol32)$coefficients[16,2]))
-vol_p32s <- as.data.frame(c(summary(vol32)$coefficients[16,5]))
+vol_b32i <- as.data.frame(c(summary(vol32)$coefficients[10,1]))
+vol_se32i <- as.data.frame(c(summary(vol32)$coefficients[10,2]))
+vol_p32i <- as.data.frame(c(summary(vol32)$coefficients[10,5]))
 
-vol33 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+vol33 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                 site_trvtmlh_vol_cent + scale(subj_trvtmlh_vol) + site_trvtmlh_vol_cent*wave + scale(subj_trvtmlh_vol)*wave +
                 (1 + wave|site_id/id), 
               data = pfactor_red, 
               control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-vol_b33i <- as.data.frame(c(summary(vol33)$coefficients[14,1]))
-vol_se33i <- as.data.frame(c(summary(vol33)$coefficients[14,2]))
-vol_p33i <- as.data.frame(c(summary(vol33)$coefficients[14,5]))
-vol_b33s <- as.data.frame(c(summary(vol33)$coefficients[16,1]))
-vol_se33s <- as.data.frame(c(summary(vol33)$coefficients[16,2]))
-vol_p33s <- as.data.frame(c(summary(vol33)$coefficients[16,5]))
+vol_b33i <- as.data.frame(c(summary(vol33)$coefficients[10,1]))
+vol_se33i <- as.data.frame(c(summary(vol33)$coefficients[10,2]))
+vol_p33i <- as.data.frame(c(summary(vol33)$coefficients[10,5]))
 
-vol34 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+vol34 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                 site_insulalh_vol_cent + scale(subj_insulalh_vol) + site_insulalh_vol_cent*wave + scale(subj_insulalh_vol)*wave +
                 (1 + wave|site_id/id), 
               data = pfactor_red, 
               control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-vol_b34i <- as.data.frame(c(summary(vol34)$coefficients[14,1]))
-vol_se34i <- as.data.frame(c(summary(vol34)$coefficients[14,2]))
-vol_p34i <- as.data.frame(c(summary(vol34)$coefficients[14,5]))
-vol_b34s <- as.data.frame(c(summary(vol34)$coefficients[16,1]))
-vol_se34s <- as.data.frame(c(summary(vol34)$coefficients[16,2]))
-vol_p34s <- as.data.frame(c(summary(vol34)$coefficients[16,5]))
+vol_b34i <- as.data.frame(c(summary(vol34)$coefficients[10,1]))
+vol_se34i <- as.data.frame(c(summary(vol34)$coefficients[10,2]))
+vol_p34i <- as.data.frame(c(summary(vol34)$coefficients[10,5]))
 
-vol35 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+vol35 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                 site_banksstsrh_vol_cent + scale(subj_banksstsrh_vol) + site_banksstsrh_vol_cent*wave + scale(subj_banksstsrh_vol)*wave +
                 (1 + wave|site_id/id), 
               data = pfactor_red, 
               control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-vol_b35i <- as.data.frame(c(summary(vol35)$coefficients[14,1]))
-vol_se35i <- as.data.frame(c(summary(vol35)$coefficients[14,2]))
-vol_p35i <- as.data.frame(c(summary(vol35)$coefficients[14,5]))
-vol_b35s <- as.data.frame(c(summary(vol35)$coefficients[16,1]))
-vol_se35s <- as.data.frame(c(summary(vol35)$coefficients[16,2]))
-vol_p35s <- as.data.frame(c(summary(vol35)$coefficients[16,5]))
+vol_b35i <- as.data.frame(c(summary(vol35)$coefficients[10,1]))
+vol_se35i <- as.data.frame(c(summary(vol35)$coefficients[10,2]))
+vol_p35i <- as.data.frame(c(summary(vol35)$coefficients[10,5]))
 
-vol36 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+vol36 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                 site_cdacaterh_vol_cent + scale(subj_cdacaterh_vol) + site_cdacaterh_vol_cent*wave + scale(subj_cdacaterh_vol)*wave +
                 (1 + wave|site_id/id), 
               data = pfactor_red, 
               control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-vol_b36i <- as.data.frame(c(summary(vol36)$coefficients[14,1]))
-vol_se36i <- as.data.frame(c(summary(vol36)$coefficients[14,2]))
-vol_p36i <- as.data.frame(c(summary(vol36)$coefficients[14,5]))
-vol_b36s <- as.data.frame(c(summary(vol36)$coefficients[16,1]))
-vol_se36s <- as.data.frame(c(summary(vol36)$coefficients[16,2]))
-vol_p36s <- as.data.frame(c(summary(vol36)$coefficients[16,5]))
+vol_b36i <- as.data.frame(c(summary(vol36)$coefficients[10,1]))
+vol_se36i <- as.data.frame(c(summary(vol36)$coefficients[10,2]))
+vol_p36i <- as.data.frame(c(summary(vol36)$coefficients[10,5]))
 
-vol37 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+vol37 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                 site_cdmdfrrh_vol_cent + scale(subj_cdmdfrrh_vol) + site_cdmdfrrh_vol_cent*wave + scale(subj_cdmdfrrh_vol)*wave +
                 (1 + wave|site_id/id), 
               data = pfactor_red, 
               control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-vol_b37i <- as.data.frame(c(summary(vol37)$coefficients[14,1]))
-vol_se37i <- as.data.frame(c(summary(vol37)$coefficients[14,2]))
-vol_p37i <- as.data.frame(c(summary(vol37)$coefficients[14,5]))
-vol_b37s <- as.data.frame(c(summary(vol37)$coefficients[16,1]))
-vol_se37s <- as.data.frame(c(summary(vol37)$coefficients[16,2]))
-vol_p37s <- as.data.frame(c(summary(vol37)$coefficients[16,5]))
+vol_b37i <- as.data.frame(c(summary(vol37)$coefficients[10,1]))
+vol_se37i <- as.data.frame(c(summary(vol37)$coefficients[10,2]))
+vol_p37i <- as.data.frame(c(summary(vol37)$coefficients[10,5]))
 
-vol38 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+vol38 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                 site_cuneusrh_vol_cent + scale(subj_cuneusrh_vol) + site_cuneusrh_vol_cent*wave + scale(subj_cuneusrh_vol)*wave +
                 (1 + wave|site_id/id), 
               data = pfactor_red, 
               control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-vol_b38i <- as.data.frame(c(summary(vol38)$coefficients[14,1]))
-vol_se38i <- as.data.frame(c(summary(vol38)$coefficients[14,2]))
-vol_p38i <- as.data.frame(c(summary(vol38)$coefficients[14,5]))
-vol_b38s <- as.data.frame(c(summary(vol38)$coefficients[16,1]))
-vol_se38s <- as.data.frame(c(summary(vol38)$coefficients[16,2]))
-vol_p38s <- as.data.frame(c(summary(vol38)$coefficients[16,5]))
+vol_b38i <- as.data.frame(c(summary(vol38)$coefficients[10,1]))
+vol_se38i <- as.data.frame(c(summary(vol38)$coefficients[10,2]))
+vol_p38i <- as.data.frame(c(summary(vol38)$coefficients[10,5]))
 
-vol39 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+vol39 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                 site_ehinalrh_vol_cent + scale(subj_ehinalrh_vol) + site_ehinalrh_vol_cent*wave + scale(subj_ehinalrh_vol)*wave +
                 (1 + wave|site_id/id), 
               data = pfactor_red, 
               control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-vol_b39i <- as.data.frame(c(summary(vol39)$coefficients[14,1]))
-vol_se39i <- as.data.frame(c(summary(vol39)$coefficients[14,2]))
-vol_p39i <- as.data.frame(c(summary(vol39)$coefficients[14,5]))
-vol_b39s <- as.data.frame(c(summary(vol39)$coefficients[16,1]))
-vol_se39s <- as.data.frame(c(summary(vol39)$coefficients[16,2]))
-vol_p39s <- as.data.frame(c(summary(vol39)$coefficients[16,5]))
+vol_b39i <- as.data.frame(c(summary(vol39)$coefficients[10,1]))
+vol_se39i <- as.data.frame(c(summary(vol39)$coefficients[10,2]))
+vol_p39i <- as.data.frame(c(summary(vol39)$coefficients[10,5]))
 
-vol40 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+vol40 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                 site_fusiformrh_vol_cent + scale(subj_fusiformrh_vol) + site_fusiformrh_vol_cent*wave + scale(subj_fusiformrh_vol)*wave +
                 (1 + wave|site_id/id), 
               data = pfactor_red, 
               control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-vol_b40i <- as.data.frame(c(summary(vol40)$coefficients[14,1]))
-vol_se40i <- as.data.frame(c(summary(vol40)$coefficients[14,2]))
-vol_p40i <- as.data.frame(c(summary(vol40)$coefficients[14,5]))
-vol_b40s <- as.data.frame(c(summary(vol40)$coefficients[16,1]))
-vol_se40s <- as.data.frame(c(summary(vol40)$coefficients[16,2]))
-vol_p40s <- as.data.frame(c(summary(vol40)$coefficients[16,5]))
+vol_b40i <- as.data.frame(c(summary(vol40)$coefficients[10,1]))
+vol_se40i <- as.data.frame(c(summary(vol40)$coefficients[10,2]))
+vol_p40i <- as.data.frame(c(summary(vol40)$coefficients[10,5]))
 
-vol41 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+vol41 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                 site_ifplrh_vol_cent + scale(subj_ifplrh_vol) + site_ifplrh_vol_cent*wave + scale(subj_ifplrh_vol)*wave +
                 (1 + wave|site_id/id), 
               data = pfactor_red, 
               control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-vol_b41i <- as.data.frame(c(summary(vol41)$coefficients[14,1]))
-vol_se41i <- as.data.frame(c(summary(vol41)$coefficients[14,2]))
-vol_p41i <- as.data.frame(c(summary(vol41)$coefficients[14,5]))
-vol_b41s <- as.data.frame(c(summary(vol41)$coefficients[16,1]))
-vol_se41s <- as.data.frame(c(summary(vol41)$coefficients[16,2]))
-vol_p41s <- as.data.frame(c(summary(vol41)$coefficients[16,5]))
+vol_b41i <- as.data.frame(c(summary(vol41)$coefficients[10,1]))
+vol_se41i <- as.data.frame(c(summary(vol41)$coefficients[10,2]))
+vol_p41i <- as.data.frame(c(summary(vol41)$coefficients[10,5]))
 
-vol42 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+vol42 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                 site_iftmrh_vol_cent + scale(subj_iftmrh_vol) + site_iftmrh_vol_cent*wave + scale(subj_iftmrh_vol)*wave +
                 (1 + wave|site_id/id), 
               data = pfactor_red, 
               control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-vol_b42i <- as.data.frame(c(summary(vol42)$coefficients[14,1]))
-vol_se42i <- as.data.frame(c(summary(vol42)$coefficients[14,2]))
-vol_p42i <- as.data.frame(c(summary(vol42)$coefficients[14,5]))
-vol_b42s <- as.data.frame(c(summary(vol42)$coefficients[16,1]))
-vol_se42s <- as.data.frame(c(summary(vol42)$coefficients[16,2]))
-vol_p42s <- as.data.frame(c(summary(vol42)$coefficients[16,5]))
+vol_b42i <- as.data.frame(c(summary(vol42)$coefficients[10,1]))
+vol_se42i <- as.data.frame(c(summary(vol42)$coefficients[10,2]))
+vol_p42i <- as.data.frame(c(summary(vol42)$coefficients[10,5]))
 
-vol43 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+vol43 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                 site_ihcaterh_vol_cent + scale(subj_ihcaterh_vol) + site_ihcaterh_vol_cent*wave + scale(subj_ihcaterh_vol)*wave +
                 (1 + wave|site_id/id), 
               data = pfactor_red, 
               control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-vol_b43i <- as.data.frame(c(summary(vol43)$coefficients[14,1]))
-vol_se43i <- as.data.frame(c(summary(vol43)$coefficients[14,2]))
-vol_p43i <- as.data.frame(c(summary(vol43)$coefficients[14,5]))
-vol_b43s <- as.data.frame(c(summary(vol43)$coefficients[16,1]))
-vol_se43s <- as.data.frame(c(summary(vol43)$coefficients[16,2]))
-vol_p43s <- as.data.frame(c(summary(vol43)$coefficients[16,5]))
+vol_b43i <- as.data.frame(c(summary(vol43)$coefficients[10,1]))
+vol_se43i <- as.data.frame(c(summary(vol43)$coefficients[10,2]))
+vol_p43i <- as.data.frame(c(summary(vol43)$coefficients[10,5]))
 
-vol44 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+vol44 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                 site_loccrh_vol_cent + scale(subj_loccrh_vol) + site_loccrh_vol_cent*wave + scale(subj_loccrh_vol)*wave +
                 (1 + wave|site_id/id), 
               data = pfactor_red, 
               control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-vol_b44i <- as.data.frame(c(summary(vol44)$coefficients[14,1]))
-vol_se44i <- as.data.frame(c(summary(vol44)$coefficients[14,2]))
-vol_p44i <- as.data.frame(c(summary(vol44)$coefficients[14,5]))
-vol_b44s <- as.data.frame(c(summary(vol44)$coefficients[16,1]))
-vol_se44s <- as.data.frame(c(summary(vol44)$coefficients[16,2]))
-vol_p44s <- as.data.frame(c(summary(vol44)$coefficients[16,5]))
+vol_b44i <- as.data.frame(c(summary(vol44)$coefficients[10,1]))
+vol_se44i <- as.data.frame(c(summary(vol44)$coefficients[10,2]))
+vol_p44i <- as.data.frame(c(summary(vol44)$coefficients[10,5]))
 
-vol45 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+vol45 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                 site_lobfrrh_vol_cent + scale(subj_lobfrrh_vol) + site_lobfrrh_vol_cent*wave + scale(subj_lobfrrh_vol)*wave +
                 (1 + wave|site_id/id), 
               data = pfactor_red, 
               control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-vol_b45i <- as.data.frame(c(summary(vol45)$coefficients[14,1]))
-vol_se45i <- as.data.frame(c(summary(vol45)$coefficients[14,2]))
-vol_p45i <- as.data.frame(c(summary(vol45)$coefficients[14,5]))
-vol_b45s <- as.data.frame(c(summary(vol45)$coefficients[16,1]))
-vol_se45s <- as.data.frame(c(summary(vol45)$coefficients[16,2]))
-vol_p45s <- as.data.frame(c(summary(vol45)$coefficients[16,5]))
+vol_b45i <- as.data.frame(c(summary(vol45)$coefficients[10,1]))
+vol_se45i <- as.data.frame(c(summary(vol45)$coefficients[10,2]))
+vol_p45i <- as.data.frame(c(summary(vol45)$coefficients[10,5]))
 
-vol46 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+vol46 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                 site_lingualrh_vol_cent + scale(subj_lingualrh_vol) + site_lingualrh_vol_cent*wave + scale(subj_lingualrh_vol)*wave +
                 (1 + wave|site_id/id), 
               data = pfactor_red, 
               control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-vol_b46i <- as.data.frame(c(summary(vol46)$coefficients[14,1]))
-vol_se46i <- as.data.frame(c(summary(vol46)$coefficients[14,2]))
-vol_p46i <- as.data.frame(c(summary(vol46)$coefficients[14,5]))
-vol_b46s <- as.data.frame(c(summary(vol46)$coefficients[16,1]))
-vol_se46s <- as.data.frame(c(summary(vol46)$coefficients[16,2]))
-vol_p46s <- as.data.frame(c(summary(vol46)$coefficients[16,5]))
+vol_b46i <- as.data.frame(c(summary(vol46)$coefficients[10,1]))
+vol_se46i <- as.data.frame(c(summary(vol46)$coefficients[10,2]))
+vol_p46i <- as.data.frame(c(summary(vol46)$coefficients[10,5]))
 
-vol47 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+vol47 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                 site_mobfrrh_vol_cent + scale(subj_mobfrrh_vol) + site_mobfrrh_vol_cent*wave + scale(subj_mobfrrh_vol)*wave +
                 (1 + wave|site_id/id), 
               data = pfactor_red, 
               control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-vol_b47i <- as.data.frame(c(summary(vol47)$coefficients[14,1]))
-vol_se47i <- as.data.frame(c(summary(vol47)$coefficients[14,2]))
-vol_p47i <- as.data.frame(c(summary(vol47)$coefficients[14,5]))
-vol_b47s <- as.data.frame(c(summary(vol47)$coefficients[16,1]))
-vol_se47s <- as.data.frame(c(summary(vol47)$coefficients[16,2]))
-vol_p47s <- as.data.frame(c(summary(vol47)$coefficients[16,5]))
+vol_b47i <- as.data.frame(c(summary(vol47)$coefficients[10,1]))
+vol_se47i <- as.data.frame(c(summary(vol47)$coefficients[10,2]))
+vol_p47i <- as.data.frame(c(summary(vol47)$coefficients[10,5]))
 
-vol48 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+vol48 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                 site_mdtmrh_vol_cent + scale(subj_mdtmrh_vol) + site_mdtmrh_vol_cent*wave + scale(subj_mdtmrh_vol)*wave +
                 (1 + wave|site_id/id), 
               data = pfactor_red, 
               control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-vol_b48i <- as.data.frame(c(summary(vol48)$coefficients[14,1]))
-vol_se48i <- as.data.frame(c(summary(vol48)$coefficients[14,2]))
-vol_p48i <- as.data.frame(c(summary(vol48)$coefficients[14,5]))
-vol_b48s <- as.data.frame(c(summary(vol48)$coefficients[16,1]))
-vol_se48s <- as.data.frame(c(summary(vol48)$coefficients[16,2]))
-vol_p48s <- as.data.frame(c(summary(vol48)$coefficients[16,5]))
+vol_b48i <- as.data.frame(c(summary(vol48)$coefficients[10,1]))
+vol_se48i <- as.data.frame(c(summary(vol48)$coefficients[10,2]))
+vol_p48i <- as.data.frame(c(summary(vol48)$coefficients[10,5]))
 
-vol49 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+vol49 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                 site_parahpalrh_vol_cent + scale(subj_parahpalrh_vol) + site_parahpalrh_vol_cent*wave + scale(subj_parahpalrh_vol)*wave +
                 (1 + wave|site_id/id), 
               data = pfactor_red, 
               control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-vol_b49i <- as.data.frame(c(summary(vol49)$coefficients[14,1]))
-vol_se49i <- as.data.frame(c(summary(vol49)$coefficients[14,2]))
-vol_p49i <- as.data.frame(c(summary(vol49)$coefficients[14,5]))
-vol_b49s <- as.data.frame(c(summary(vol49)$coefficients[16,1]))
-vol_se49s <- as.data.frame(c(summary(vol49)$coefficients[16,2]))
-vol_p49s <- as.data.frame(c(summary(vol49)$coefficients[16,5]))
+vol_b49i <- as.data.frame(c(summary(vol49)$coefficients[10,1]))
+vol_se49i <- as.data.frame(c(summary(vol49)$coefficients[10,2]))
+vol_p49i <- as.data.frame(c(summary(vol49)$coefficients[10,5]))
 
-vol50 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+vol50 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                 site_paracnrh_vol_cent + scale(subj_paracnrh_vol) + site_paracnrh_vol_cent*wave + scale(subj_paracnrh_vol)*wave +
                 (1 + wave|site_id/id), 
               data = pfactor_red, 
               control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-vol_b50i <- as.data.frame(c(summary(vol50)$coefficients[14,1]))
-vol_se50i <- as.data.frame(c(summary(vol50)$coefficients[14,2]))
-vol_p50i <- as.data.frame(c(summary(vol50)$coefficients[14,5]))
-vol_b50s <- as.data.frame(c(summary(vol50)$coefficients[16,1]))
-vol_se50s <- as.data.frame(c(summary(vol50)$coefficients[16,2]))
-vol_p50s <- as.data.frame(c(summary(vol50)$coefficients[16,5]))
+vol_b50i <- as.data.frame(c(summary(vol50)$coefficients[10,1]))
+vol_se50i <- as.data.frame(c(summary(vol50)$coefficients[10,2]))
+vol_p50i <- as.data.frame(c(summary(vol50)$coefficients[10,5]))
 
-vol51 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+vol51 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                 site_parsopcrh_vol_cent + scale(subj_parsopcrh_vol) + site_parsopcrh_vol_cent*wave + scale(subj_parsopcrh_vol)*wave +
                 (1 + wave|site_id/id), 
               data = pfactor_red, 
               control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-vol_b51i <- as.data.frame(c(summary(vol51)$coefficients[14,1]))
-vol_se51i <- as.data.frame(c(summary(vol51)$coefficients[14,2]))
-vol_p51i <- as.data.frame(c(summary(vol51)$coefficients[14,5]))
-vol_b51s <- as.data.frame(c(summary(vol51)$coefficients[16,1]))
-vol_se51s <- as.data.frame(c(summary(vol51)$coefficients[16,2]))
-vol_p51s <- as.data.frame(c(summary(vol51)$coefficients[16,5]))
+vol_b51i <- as.data.frame(c(summary(vol51)$coefficients[10,1]))
+vol_se51i <- as.data.frame(c(summary(vol51)$coefficients[10,2]))
+vol_p51i <- as.data.frame(c(summary(vol51)$coefficients[10,5]))
 
-vol52 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+vol52 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                 site_parsobisrh_vol_cent + scale(subj_parsobisrh_vol) + site_parsobisrh_vol_cent*wave + scale(subj_parsobisrh_vol)*wave +
                 (1 + wave|site_id/id), 
               data = pfactor_red, 
               control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-vol_b52i <- as.data.frame(c(summary(vol52)$coefficients[14,1]))
-vol_se52i <- as.data.frame(c(summary(vol52)$coefficients[14,2]))
-vol_p52i <- as.data.frame(c(summary(vol52)$coefficients[14,5]))
-vol_b52s <- as.data.frame(c(summary(vol52)$coefficients[16,1]))
-vol_se52s <- as.data.frame(c(summary(vol52)$coefficients[16,2]))
-vol_p52s <- as.data.frame(c(summary(vol52)$coefficients[16,5]))
+vol_b52i <- as.data.frame(c(summary(vol52)$coefficients[10,1]))
+vol_se52i <- as.data.frame(c(summary(vol52)$coefficients[10,2]))
+vol_p52i <- as.data.frame(c(summary(vol52)$coefficients[10,5]))
 
-vol53 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+vol53 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                 site_parstgrisrh_vol_cent + scale(subj_parstgrisrh_vol) + site_parstgrisrh_vol_cent*wave + scale(subj_parstgrisrh_vol)*wave +
                 (1 + wave|site_id/id), 
               data = pfactor_red, 
               control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-vol_b53i <- as.data.frame(c(summary(vol53)$coefficients[14,1]))
-vol_se53i <- as.data.frame(c(summary(vol53)$coefficients[14,2]))
-vol_p53i <- as.data.frame(c(summary(vol53)$coefficients[14,5]))
-vol_b53s <- as.data.frame(c(summary(vol53)$coefficients[16,1]))
-vol_se53s <- as.data.frame(c(summary(vol53)$coefficients[16,2]))
-vol_p53s <- as.data.frame(c(summary(vol53)$coefficients[16,5]))
+vol_b53i <- as.data.frame(c(summary(vol53)$coefficients[10,1]))
+vol_se53i <- as.data.frame(c(summary(vol53)$coefficients[10,2]))
+vol_p53i <- as.data.frame(c(summary(vol53)$coefficients[10,5]))
 
-vol54 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+vol54 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                 site_periccrh_vol_cent + scale(subj_periccrh_vol) + site_periccrh_vol_cent*wave + scale(subj_periccrh_vol)*wave +
                 (1 + wave|site_id/id), 
               data = pfactor_red, 
               control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-vol_b54i <- as.data.frame(c(summary(vol54)$coefficients[14,1]))
-vol_se54i <- as.data.frame(c(summary(vol54)$coefficients[14,2]))
-vol_p54i <- as.data.frame(c(summary(vol54)$coefficients[14,5]))
-vol_b54s <- as.data.frame(c(summary(vol54)$coefficients[16,1]))
-vol_se54s <- as.data.frame(c(summary(vol54)$coefficients[16,2]))
-vol_p54s <- as.data.frame(c(summary(vol54)$coefficients[16,5]))
+vol_b54i <- as.data.frame(c(summary(vol54)$coefficients[10,1]))
+vol_se54i <- as.data.frame(c(summary(vol54)$coefficients[10,2]))
+vol_p54i <- as.data.frame(c(summary(vol54)$coefficients[10,5]))
 
-vol55 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+vol55 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                 site_postcnrh_vol_cent + scale(subj_postcnrh_vol) + site_postcnrh_vol_cent*wave + scale(subj_postcnrh_vol)*wave +
                 (1 + wave|site_id/id), 
               data = pfactor_red, 
               control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-vol_b55i <- as.data.frame(c(summary(vol55)$coefficients[14,1]))
-vol_se55i <- as.data.frame(c(summary(vol55)$coefficients[14,2]))
-vol_p55i <- as.data.frame(c(summary(vol55)$coefficients[14,5]))
-vol_b55s <- as.data.frame(c(summary(vol55)$coefficients[16,1]))
-vol_se55s <- as.data.frame(c(summary(vol55)$coefficients[16,2]))
-vol_p55s <- as.data.frame(c(summary(vol55)$coefficients[16,5]))
+vol_b55i <- as.data.frame(c(summary(vol55)$coefficients[10,1]))
+vol_se55i <- as.data.frame(c(summary(vol55)$coefficients[10,2]))
+vol_p55i <- as.data.frame(c(summary(vol55)$coefficients[10,5]))
 
-vol56 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+vol56 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                 site_ptcaterh_vol_cent + scale(subj_ptcaterh_vol) + site_ptcaterh_vol_cent*wave + scale(subj_ptcaterh_vol)*wave +
                 (1 + wave|site_id/id), 
               data = pfactor_red, 
               control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-vol_b56i <- as.data.frame(c(summary(vol56)$coefficients[14,1]))
-vol_se56i <- as.data.frame(c(summary(vol56)$coefficients[14,2]))
-vol_p56i <- as.data.frame(c(summary(vol56)$coefficients[14,5]))
-vol_b56s <- as.data.frame(c(summary(vol56)$coefficients[16,1]))
-vol_se56s <- as.data.frame(c(summary(vol56)$coefficients[16,2]))
-vol_p56s <- as.data.frame(c(summary(vol56)$coefficients[16,5]))
+vol_b56i <- as.data.frame(c(summary(vol56)$coefficients[10,1]))
+vol_se56i <- as.data.frame(c(summary(vol56)$coefficients[10,2]))
+vol_p56i <- as.data.frame(c(summary(vol56)$coefficients[10,5]))
 
-vol57 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+vol57 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                 site_precnrh_vol_cent + scale(subj_precnrh_vol) + site_precnrh_vol_cent*wave + scale(subj_precnrh_vol)*wave +
                 (1 + wave|site_id/id), 
               data = pfactor_red, 
               control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-vol_b57i <- as.data.frame(c(summary(vol57)$coefficients[14,1]))
-vol_se57i <- as.data.frame(c(summary(vol57)$coefficients[14,2]))
-vol_p57i <- as.data.frame(c(summary(vol57)$coefficients[14,5]))
-vol_b57s <- as.data.frame(c(summary(vol57)$coefficients[16,1]))
-vol_se57s <- as.data.frame(c(summary(vol57)$coefficients[16,2]))
-vol_p57s <- as.data.frame(c(summary(vol57)$coefficients[16,5]))
+vol_b57i <- as.data.frame(c(summary(vol57)$coefficients[10,1]))
+vol_se57i <- as.data.frame(c(summary(vol57)$coefficients[10,2]))
+vol_p57i <- as.data.frame(c(summary(vol57)$coefficients[10,5]))
 
-vol58 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+vol58 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                 site_pcrh_vol_cent + scale(subj_pcrh_vol) + site_pcrh_vol_cent*wave + scale(subj_pcrh_vol)*wave +
                 (1 + wave|site_id/id), 
               data = pfactor_red, 
               control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-vol_b58i <- as.data.frame(c(summary(vol58)$coefficients[14,1]))
-vol_se58i <- as.data.frame(c(summary(vol58)$coefficients[14,2]))
-vol_p58i <- as.data.frame(c(summary(vol58)$coefficients[14,5]))
-vol_b58s <- as.data.frame(c(summary(vol58)$coefficients[16,1]))
-vol_se58s <- as.data.frame(c(summary(vol58)$coefficients[16,2]))
-vol_p58s <- as.data.frame(c(summary(vol58)$coefficients[16,5]))
+vol_b58i <- as.data.frame(c(summary(vol58)$coefficients[10,1]))
+vol_se58i <- as.data.frame(c(summary(vol58)$coefficients[10,2]))
+vol_p58i <- as.data.frame(c(summary(vol58)$coefficients[10,5]))
 
-vol59 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+vol59 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                 site_rracaterh_vol_cent + scale(subj_rracaterh_vol) + site_rracaterh_vol_cent*wave + scale(subj_rracaterh_vol)*wave +
                 (1 + wave|site_id/id), 
               data = pfactor_red, 
               control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-vol_b59i <- as.data.frame(c(summary(vol59)$coefficients[14,1]))
-vol_se59i <- as.data.frame(c(summary(vol59)$coefficients[14,2]))
-vol_p59i <- as.data.frame(c(summary(vol59)$coefficients[14,5]))
-vol_b59s <- as.data.frame(c(summary(vol59)$coefficients[16,1]))
-vol_se59s <- as.data.frame(c(summary(vol59)$coefficients[16,2]))
-vol_p59s <- as.data.frame(c(summary(vol59)$coefficients[16,5]))
+vol_b59i <- as.data.frame(c(summary(vol59)$coefficients[10,1]))
+vol_se59i <- as.data.frame(c(summary(vol59)$coefficients[10,2]))
+vol_p59i <- as.data.frame(c(summary(vol59)$coefficients[10,5]))
 
-vol60 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+vol60 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                 site_rrmdfrrh_vol_cent + scale(subj_rrmdfrrh_vol) + site_rrmdfrrh_vol_cent*wave + scale(subj_rrmdfrrh_vol)*wave +
                 (1 + wave|site_id/id), 
               data = pfactor_red, 
               control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-vol_b60i <- as.data.frame(c(summary(vol60)$coefficients[14,1]))
-vol_se60i <- as.data.frame(c(summary(vol60)$coefficients[14,2]))
-vol_p60i <- as.data.frame(c(summary(vol60)$coefficients[14,5]))
-vol_b60s <- as.data.frame(c(summary(vol60)$coefficients[16,1]))
-vol_se60s <- as.data.frame(c(summary(vol60)$coefficients[16,2]))
-vol_p60s <- as.data.frame(c(summary(vol60)$coefficients[16,5]))
+vol_b60i <- as.data.frame(c(summary(vol60)$coefficients[10,1]))
+vol_se60i <- as.data.frame(c(summary(vol60)$coefficients[10,2]))
+vol_p60i <- as.data.frame(c(summary(vol60)$coefficients[10,5]))
 
-vol61 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+vol61 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                 site_sufrrh_vol_cent + scale(subj_sufrrh_vol) + site_sufrrh_vol_cent*wave + scale(subj_sufrrh_vol)*wave +
                 (1 + wave|site_id/id), 
               data = pfactor_red, 
               control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-vol_b61i <- as.data.frame(c(summary(vol61)$coefficients[14,1]))
-vol_se61i <- as.data.frame(c(summary(vol61)$coefficients[14,2]))
-vol_p61i <- as.data.frame(c(summary(vol61)$coefficients[14,5]))
-vol_b61s <- as.data.frame(c(summary(vol61)$coefficients[16,1]))
-vol_se61s <- as.data.frame(c(summary(vol61)$coefficients[16,2]))
-vol_p61s <- as.data.frame(c(summary(vol61)$coefficients[16,5]))
+vol_b61i <- as.data.frame(c(summary(vol61)$coefficients[10,1]))
+vol_se61i <- as.data.frame(c(summary(vol61)$coefficients[10,2]))
+vol_p61i <- as.data.frame(c(summary(vol61)$coefficients[10,5]))
 
-vol62 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+vol62 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                 site_suplrh_vol_cent + scale(subj_suplrh_vol) + site_suplrh_vol_cent*wave + scale(subj_suplrh_vol)*wave +
                 (1 + wave|site_id/id), 
               data = pfactor_red, 
               control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-vol_b62i <- as.data.frame(c(summary(vol62)$coefficients[14,1]))
-vol_se62i <- as.data.frame(c(summary(vol62)$coefficients[14,2]))
-vol_p62i <- as.data.frame(c(summary(vol62)$coefficients[14,5]))
-vol_b62s <- as.data.frame(c(summary(vol62)$coefficients[16,1]))
-vol_se62s <- as.data.frame(c(summary(vol62)$coefficients[16,2]))
-vol_p62s <- as.data.frame(c(summary(vol62)$coefficients[16,5]))
+vol_b62i <- as.data.frame(c(summary(vol62)$coefficients[10,1]))
+vol_se62i <- as.data.frame(c(summary(vol62)$coefficients[10,2]))
+vol_p62i <- as.data.frame(c(summary(vol62)$coefficients[10,5]))
 
-vol63 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+vol63 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                 site_sutmrh_vol_cent + scale(subj_sutmrh_vol) + site_sutmrh_vol_cent*wave + scale(subj_sutmrh_vol)*wave +
                 (1 + wave|site_id/id), 
               data = pfactor_red, 
               control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-vol_b63i <- as.data.frame(c(summary(vol63)$coefficients[14,1]))
-vol_se63i <- as.data.frame(c(summary(vol63)$coefficients[14,2]))
-vol_p63i <- as.data.frame(c(summary(vol63)$coefficients[14,5]))
-vol_b63s <- as.data.frame(c(summary(vol63)$coefficients[16,1]))
-vol_se63s <- as.data.frame(c(summary(vol63)$coefficients[16,2]))
-vol_p63s <- as.data.frame(c(summary(vol63)$coefficients[16,5]))
+vol_b63i <- as.data.frame(c(summary(vol63)$coefficients[10,1]))
+vol_se63i <- as.data.frame(c(summary(vol63)$coefficients[10,2]))
+vol_p63i <- as.data.frame(c(summary(vol63)$coefficients[10,5]))
 
-vol64 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+vol64 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                 site_smrh_vol_cent + scale(subj_smrh_vol) + site_smrh_vol_cent*wave + scale(subj_smrh_vol)*wave +
                 (1 + wave|site_id/id), 
               data = pfactor_red, 
               control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-vol_b64i <- as.data.frame(c(summary(vol64)$coefficients[14,1]))
-vol_se64i <- as.data.frame(c(summary(vol64)$coefficients[14,2]))
-vol_p64i <- as.data.frame(c(summary(vol64)$coefficients[14,5]))
-vol_b64s <- as.data.frame(c(summary(vol64)$coefficients[16,1]))
-vol_se64s <- as.data.frame(c(summary(vol64)$coefficients[16,2]))
-vol_p64s <- as.data.frame(c(summary(vol64)$coefficients[16,5]))
+vol_b64i <- as.data.frame(c(summary(vol64)$coefficients[10,1]))
+vol_se64i <- as.data.frame(c(summary(vol64)$coefficients[10,2]))
+vol_p64i <- as.data.frame(c(summary(vol64)$coefficients[10,5]))
 
-vol65 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+vol65 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                 site_frpolerh_vol_cent + scale(subj_frpolerh_vol) + site_frpolerh_vol_cent*wave + scale(subj_frpolerh_vol)*wave +
                 (1 + wave|site_id/id), 
               data = pfactor_red, 
               control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-vol_b65i <- as.data.frame(c(summary(vol65)$coefficients[14,1]))
-vol_se65i <- as.data.frame(c(summary(vol65)$coefficients[14,2]))
-vol_p65i <- as.data.frame(c(summary(vol65)$coefficients[14,5]))
-vol_b65s <- as.data.frame(c(summary(vol65)$coefficients[16,1]))
-vol_se65s <- as.data.frame(c(summary(vol65)$coefficients[16,2]))
-vol_p65s <- as.data.frame(c(summary(vol65)$coefficients[16,5]))
+vol_b65i <- as.data.frame(c(summary(vol65)$coefficients[10,1]))
+vol_se65i <- as.data.frame(c(summary(vol65)$coefficients[10,2]))
+vol_p65i <- as.data.frame(c(summary(vol65)$coefficients[10,5]))
 
-vol66 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+vol66 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                 site_tmpolerh_vol_cent + scale(subj_tmpolerh_vol) + site_tmpolerh_vol_cent*wave + scale(subj_tmpolerh_vol)*wave +
                 (1 + wave|site_id/id), 
               data = pfactor_red, 
               control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-vol_b66i <- as.data.frame(c(summary(vol66)$coefficients[14,1]))
-vol_se66i <- as.data.frame(c(summary(vol66)$coefficients[14,2]))
-vol_p66i <- as.data.frame(c(summary(vol66)$coefficients[14,5]))
-vol_b66s <- as.data.frame(c(summary(vol66)$coefficients[16,1]))
-vol_se66s <- as.data.frame(c(summary(vol66)$coefficients[16,2]))
-vol_p66s <- as.data.frame(c(summary(vol66)$coefficients[16,5]))
+vol_b66i <- as.data.frame(c(summary(vol66)$coefficients[10,1]))
+vol_se66i <- as.data.frame(c(summary(vol66)$coefficients[10,2]))
+vol_p66i <- as.data.frame(c(summary(vol66)$coefficients[10,5]))
 
-vol67 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+vol67 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                 site_trvtmrh_vol_cent + scale(subj_trvtmrh_vol) + site_trvtmrh_vol_cent*wave + scale(subj_trvtmrh_vol)*wave +
                 (1 + wave|site_id/id), 
               data = pfactor_red, 
               control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-vol_b67i <- as.data.frame(c(summary(vol67)$coefficients[14,1]))
-vol_se67i <- as.data.frame(c(summary(vol67)$coefficients[14,2]))
-vol_p67i <- as.data.frame(c(summary(vol67)$coefficients[14,5]))
-vol_b67s <- as.data.frame(c(summary(vol67)$coefficients[16,1]))
-vol_se67s <- as.data.frame(c(summary(vol67)$coefficients[16,2]))
-vol_p67s <- as.data.frame(c(summary(vol67)$coefficients[16,5]))
+vol_b67i <- as.data.frame(c(summary(vol67)$coefficients[10,1]))
+vol_se67i <- as.data.frame(c(summary(vol67)$coefficients[10,2]))
+vol_p67i <- as.data.frame(c(summary(vol67)$coefficients[10,5]))
 
-vol68 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+vol68 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                 site_insularh_vol_cent + scale(subj_insularh_vol) + site_insularh_vol_cent*wave + scale(subj_insularh_vol)*wave +
                 (1 + wave|site_id/id), 
               data = pfactor_red, 
               control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-vol_b68i <- as.data.frame(c(summary(vol68)$coefficients[14,1]))
-vol_se68i <- as.data.frame(c(summary(vol68)$coefficients[14,2]))
-vol_p68i <- as.data.frame(c(summary(vol68)$coefficients[14,5]))
-vol_b68s <- as.data.frame(c(summary(vol68)$coefficients[16,1]))
-vol_se68s <- as.data.frame(c(summary(vol68)$coefficients[16,2]))
-vol_p68s <- as.data.frame(c(summary(vol68)$coefficients[16,5]))
+vol_b68i <- as.data.frame(c(summary(vol68)$coefficients[10,1]))
+vol_se68i <- as.data.frame(c(summary(vol68)$coefficients[10,2]))
+vol_p68i <- as.data.frame(c(summary(vol68)$coefficients[10,5]))
 
 #create data frame with all parcel-wise cortical volume st. estimates, SEs, and p-values
 vol_parcel <- data.frame(x=c("vol"))
@@ -2079,13 +2068,6 @@ newvolbi <- c(vol_b1i,vol_b2i,vol_b3i,vol_b4i,vol_b5i,vol_b6i,vol_b7i,vol_b8i,vo
               vol_b58i,vol_b59i,vol_b60i,vol_b61i,vol_b62i,vol_b63i,vol_b64i,vol_b65i,vol_b66i,vol_b67i,vol_b68i)
 vol_parcel <- cbind(vol_parcel,newvolbi)
 
-newvolbs <- c(vol_b1s,vol_b2s,vol_b3s,vol_b4s,vol_b5s,vol_b6s,vol_b7s,vol_b8s,vol_b9s,vol_b10s,vol_b11s,vol_b12s,vol_b13s,vol_b14s,vol_b15s,
-              vol_b16s,vol_b17s,vol_b18s,vol_b19s,vol_b20s,vol_b21s,vol_b22s,vol_b23s,vol_b24s,vol_b25s,vol_b26s,vol_b27s,vol_b28s,vol_b29s,
-              vol_b30s,vol_b31s,vol_b32s,vol_b33s,vol_b34s,vol_b35s,vol_b36s,vol_b37s,vol_b38s,vol_b39s,vol_b40s,vol_b41s,vol_b42s,vol_b43s,
-              vol_b44s,vol_b45s,vol_b46s,vol_b47s,vol_b48s,vol_b49s,vol_b50s,vol_b51s,vol_b52s,vol_b53s,vol_b54s,vol_b55s,vol_b56s,vol_b57s,
-              vol_b58s,vol_b59s,vol_b60s,vol_b61s,vol_b62s,vol_b63s,vol_b64s,vol_b65s,vol_b66s,vol_b67s,vol_b68s)
-vol_parcel <- cbind(vol_parcel,newvolbs)
-
 newvolsei <- c(vol_se1i,vol_se2i,vol_se3i,vol_se4i,vol_se5i,vol_se6i,vol_se7i,vol_se8i,vol_se9i,vol_se10i,vol_se11i,vol_se12i,vol_se13i,
                vol_se14i,vol_se15i,vol_se16i,vol_se17i,vol_se18i,vol_se19i,vol_se20i,vol_se21i,vol_se22i,vol_se23i,vol_se24i,vol_se25i,
                vol_se26i,vol_se27i,vol_se28i,vol_se29i,vol_se30i,vol_se31i,vol_se32i,vol_se33i,vol_se34i,vol_se35i,vol_se36i,vol_se37i,
@@ -2094,27 +2076,12 @@ newvolsei <- c(vol_se1i,vol_se2i,vol_se3i,vol_se4i,vol_se5i,vol_se6i,vol_se7i,vo
                vol_se62i,vol_se63i,vol_se64i,vol_se65i,vol_se66i,vol_se67i,vol_se68i)
 vol_parcel <- cbind(vol_parcel,newvolsei)
 
-newvolses <- c(vol_se1s,vol_se2s,vol_se3s,vol_se4s,vol_se5s,vol_se6s,vol_se7s,vol_se8s,vol_se9s,vol_se10s,vol_se11s,vol_se12s,vol_se13s,
-               vol_se14s,vol_se15s,vol_se16s,vol_se17s,vol_se18s,vol_se19s,vol_se20s,vol_se21s,vol_se22s,vol_se23s,vol_se24s,vol_se25s,
-               vol_se26s,vol_se27s,vol_se28s,vol_se29s,vol_se30s,vol_se31s,vol_se32s,vol_se33s,vol_se34s,vol_se35s,vol_se36s,vol_se37s,
-               vol_se38s,vol_se39s,vol_se40s,vol_se41s,vol_se42s,vol_se43s,vol_se44s,vol_se45s,vol_se46s,vol_se47s,vol_se48s,vol_se49s,
-               vol_se50s,vol_se51s,vol_se52s,vol_se53s,vol_se54s,vol_se55s,vol_se56s,vol_se57s,vol_se58s,vol_se59s,vol_se60s,vol_se61s,
-               vol_se62s,vol_se63s,vol_se64s,vol_se65s,vol_se66s,vol_se67s,vol_se68s)
-vol_parcel <- cbind(vol_parcel,newvolses)
-
 newvolpi <- c(vol_p1i,vol_p2i,vol_p3i,vol_p4i,vol_p5i,vol_p6i,vol_p7i,vol_p8i,vol_p9i,vol_p10i,vol_p11i,vol_p12i,vol_p13i,vol_p14i,vol_p15i,
               vol_p16i,vol_p17i,vol_p18i,vol_p19i,vol_p20i,vol_p21i,vol_p22i,vol_p23i,vol_p24i,vol_p25i,vol_p26i,vol_p27i,vol_p28i,vol_p29i,
               vol_p30i,vol_p31i,vol_p32i,vol_p33i,vol_p34i,vol_p35i,vol_p36i,vol_p37i,vol_p38i,vol_p39i,vol_p40i,vol_p41i,vol_p42i,vol_p43i,
               vol_p44i,vol_p45i,vol_p46i,vol_p47i,vol_p48i,vol_p49i,vol_p50i,vol_p51i,vol_p52i,vol_p53i,vol_p54i,vol_p55i,vol_p56i,vol_p57i,
               vol_p58i,vol_p59i,vol_p60i,vol_p61i,vol_p62i,vol_p63i,vol_p64i,vol_p65i,vol_p66i,vol_p67i,vol_p68i)
 vol_parcel <- cbind(vol_parcel,newvolpi)
-
-newvolps <- c(vol_p1s,vol_p2s,vol_p3s,vol_p4s,vol_p5s,vol_p6s,vol_p7s,vol_p8s,vol_p9s,vol_p10s,vol_p11s,vol_p12s,vol_p13s,vol_p14s,vol_p15s,
-              vol_p16s,vol_p17s,vol_p18s,vol_p19s,vol_p20s,vol_p21s,vol_p22s,vol_p23s,vol_p24s,vol_p25s,vol_p26s,vol_p27s,vol_p28s,vol_p29s,
-              vol_p30s,vol_p31s,vol_p32s,vol_p33s,vol_p34s,vol_p35s,vol_p36s,vol_p37s,vol_p38s,vol_p39s,vol_p40s,vol_p41s,vol_p42s,vol_p43s,
-              vol_p44s,vol_p45s,vol_p46s,vol_p47s,vol_p48s,vol_p49s,vol_p50s,vol_p51s,vol_p52s,vol_p53s,vol_p54s,vol_p55s,vol_p56s,vol_p57s,
-              vol_p58s,vol_p59s,vol_p60s,vol_p61s,vol_p62s,vol_p63s,vol_p64s,vol_p65s,vol_p66s,vol_p67s,vol_p68s)
-vol_parcel <- cbind(vol_parcel,newvolps)
 
 names(vol_parcel) <- c('vol','banksstslh_vol_bi','cdacatelh_vol_bi','cdmdfrlh_vol_bi','cuneuslh_vol_bi','ehinallh_vol_bi','fusiformlh_vol_bi',
                        'ifpllh_vol_bi','iftmlh_vol_bi','ihcatelh_vol_bi','locclh_vol_bi','lobfrlh_vol_bi','linguallh_vol_bi',
@@ -2128,18 +2095,6 @@ names(vol_parcel) <- c('vol','banksstslh_vol_bi','cdacatelh_vol_bi','cdmdfrlh_vo
                        'postcnrh_vol_bi','ptcaterh_vol_bi','precnrh_vol_bi','pcrh_vol_bi','rracaterh_vol_bi','rrmdfrrh_vol_bi',
                        'sufrrh_vol_bi','suplrh_vol_bi','sutmrh_vol_bi','smrh_vol_bi','frpolerh_vol_bi',
                        'tmpolerh_vol_bi','trvtmrh_vol_bi','insularh_vol_bi',
-                       'banksstslh_vol_bs','cdacatelh_vol_bs','cdmdfrlh_vol_bs','cuneuslh_vol_bs','ehinallh_vol_bs','fusiformlh_vol_bs',
-                       'ifpllh_vol_bs','iftmlh_vol_bs','ihcatelh_vol_bs','locclh_vol_bs','lobfrlh_vol_bs','linguallh_vol_bs',
-                       'mobfrlh_vol_bs','mdtmlh_vol_bs','parahpallh_vol_bs','paracnlh_vol_bs','parsopclh_vol_bs','parsobislh_vol_bs',
-                       'parstgrislh_vol_bs','pericclh_vol_bs','postcnlh_vol_bs','ptcatelh_vol_bs','precnlh_vol_bs','pclh_vol_bs',
-                       'rracatelh_vol_bs','rrmdfrlh_vol_bs','sufrlh_vol_bs','supllh_vol_bs','sutmlh_vol_bs','smlh_vol_bs','frpolelh_vol_bs',
-                       'tmpolelh_vol_bs','trvtmlh_vol_bs','insulalh_vol_bs','banksstsrh_vol_bs','cdacaterh_vol_bs','cdmdfrrh_vol_bs',
-                       'cuneusrh_vol_bs','ehinalrh_vol_bs','fusiformrh_vol_bs','ifplrh_vol_bs','iftmrh_vol_bs','ihcaterh_vol_bs',
-                       'loccrh_vol_bs','lobfrrh_vol_bs','lingualrh_vol_bs','mobfrrh_vol_bs','mdtmrh_vol_bs','parahpalrh_vol_bs',
-                       'paracnrh_vol_bs','parsopcrh_vol_bs','parsobisrh_vol_bs','parstgrisrh_vol_bs','periccrh_vol_bs',
-                       'postcnrh_vol_bs','ptcaterh_vol_bs','precnrh_vol_bs','pcrh_vol_bs','rracaterh_vol_bs','rrmdfrrh_vol_bs',
-                       'sufrrh_vol_bs','suplrh_vol_bs','sutmrh_vol_bs','smrh_vol_bs','frpolerh_vol_bs',
-                       'tmpolerh_vol_bs','trvtmrh_vol_bs','insularh_vol_bs',
                        'banksstslh_vol_sei','cdacatelh_vol_sei','cdmdfrlh_vol_sei','cuneuslh_vol_sei','ehinallh_vol_sei','fusiformlh_vol_sei',
                        'ifpllh_vol_sei','iftmlh_vol_sei','ihcatelh_vol_sei','locclh_vol_sei','lobfrlh_vol_sei','linguallh_vol_sei',
                        'mobfrlh_vol_sei','mdtmlh_vol_sei','parahpallh_vol_sei','paracnlh_vol_sei','parsopclh_vol_sei',
@@ -2153,19 +2108,6 @@ names(vol_parcel) <- c('vol','banksstslh_vol_bi','cdacatelh_vol_bi','cdmdfrlh_vo
                        'ptcaterh_vol_sei','precnrh_vol_sei','pcrh_vol_sei','rracaterh_vol_sei','rrmdfrrh_vol_sei',
                        'sufrrh_vol_sei','suplrh_vol_sei','sutmrh_vol_sei','smrh_vol_sei','frpolerh_vol_sei',
                        'tmpolerh_vol_sei','trvtmrh_vol_sei','insularh_vol_sei',
-                       'banksstslh_vol_ses','cdacatelh_vol_ses','cdmdfrlh_vol_ses','cuneuslh_vol_ses','ehinallh_vol_ses','fusiformlh_vol_ses',
-                       'ifpllh_vol_ses','iftmlh_vol_ses','ihcatelh_vol_ses','locclh_vol_ses','lobfrlh_vol_ses','linguallh_vol_ses',
-                       'mobfrlh_vol_ses','mdtmlh_vol_ses','parahpallh_vol_ses','paracnlh_vol_ses','parsopclh_vol_ses',
-                       'parsobislh_vol_ses','parstgrislh_vol_ses','pericclh_vol_ses','postcnlh_vol_ses','ptcatelh_vol_ses',
-                       'precnlh_vol_ses','pclh_vol_ses','rracatelh_vol_ses','rrmdfrlh_vol_ses','sufrlh_vol_ses','supllh_vol_ses',
-                       'sutmlh_vol_ses','smlh_vol_ses','frpolelh_vol_ses','tmpolelh_vol_ses','trvtmlh_vol_ses','insulalh_vol_ses',
-                       'banksstsrh_vol_ses','cdacaterh_vol_ses','cdmdfrrh_vol_ses','cuneusrh_vol_ses','ehinalrh_vol_ses',
-                       'fusiformrh_vol_ses','ifplrh_vol_ses','iftmrh_vol_ses','ihcaterh_vol_ses','loccrh_vol_ses','lobfrrh_vol_ses',
-                       'lingualrh_vol_ses','mobfrrh_vol_ses','mdtmrh_vol_ses','parahpalrh_vol_ses','paracnrh_vol_ses',
-                       'parsopcrh_vol_ses','parsobisrh_vol_ses','parstgrisrh_vol_ses','periccrh_vol_ses','postcnrh_vol_ses',
-                       'ptcaterh_vol_ses','precnrh_vol_ses','pcrh_vol_ses','rracaterh_vol_ses','rrmdfrrh_vol_ses',
-                       'sufrrh_vol_ses','suplrh_vol_ses','sutmrh_vol_ses','smrh_vol_ses','frpolerh_vol_ses',
-                       'tmpolerh_vol_ses','trvtmrh_vol_ses','insularh_vol_ses',
                        'banksstslh_vol_pi','cdacatelh_vol_pi','cdmdfrlh_vol_pi','cuneuslh_vol_pi','ehinallh_vol_pi','fusiformlh_vol_pi','ifpllh_vol_pi','iftmlh_vol_pi',
                        'ihcatelh_vol_pi','locclh_vol_pi','lobfrlh_vol_pi','linguallh_vol_pi','mobfrlh_vol_pi','mdtmlh_vol_pi',
                        'parahpallh_vol_pi','paracnlh_vol_pi','parsopclh_vol_pi','parsobislh_vol_pi','parstgrislh_vol_pi',
@@ -2177,19 +2119,7 @@ names(vol_parcel) <- c('vol','banksstslh_vol_bi','cdacatelh_vol_bi','cdmdfrlh_vo
                        'paracnrh_vol_pi','parsopcrh_vol_pi','parsobisrh_vol_pi','parstgrisrh_vol_pi','periccrh_vol_pi',
                        'postcnrh_vol_pi','ptcaterh_vol_pi','precnrh_vol_pi','pcrh_vol_pi','rracaterh_vol_pi','rrmdfrrh_vol_pi',
                        'sufrrh_vol_pi','suplrh_vol_pi','sutmrh_vol_pi','smrh_vol_pi','frpolerh_vol_pi',
-                       'tmpolerh_vol_pi','trvtmrh_vol_pi','insularh_vol_pi',
-                       'banksstslh_vol_ps','cdacatelh_vol_ps','cdmdfrlh_vol_ps','cuneuslh_vol_ps','ehinallh_vol_ps','fusiformlh_vol_ps','ifpllh_vol_ps','iftmlh_vol_ps',
-                       'ihcatelh_vol_ps','locclh_vol_ps','lobfrlh_vol_ps','linguallh_vol_ps','mobfrlh_vol_ps','mdtmlh_vol_ps',
-                       'parahpallh_vol_ps','paracnlh_vol_ps','parsopclh_vol_ps','parsobislh_vol_ps','parstgrislh_vol_ps',
-                       'pericclh_vol_ps','postcnlh_vol_ps','ptcatelh_vol_ps','precnlh_vol_ps','pclh_vol_ps','rracatelh_vol_ps',
-                       'rrmdfrlh_vol_ps','sufrlh_vol_ps','supllh_vol_ps','sutmlh_vol_ps','smlh_vol_ps','frpolelh_vol_ps',
-                       'tmpolelh_vol_ps','trvtmlh_vol_ps','insulalh_vol_ps','banksstsrh_vol_ps','cdacaterh_vol_ps','cdmdfrrh_vol_ps',
-                       'cuneusrh_vol_ps','ehinalrh_vol_ps','fusiformrh_vol_ps','ifplrh_vol_ps','iftmrh_vol_ps','ihcaterh_vol_ps',
-                       'loccrh_vol_ps','lobfrrh_vol_ps','lingualrh_vol_ps','mobfrrh_vol_ps','mdtmrh_vol_ps','parahpalrh_vol_ps',
-                       'paracnrh_vol_ps','parsopcrh_vol_ps','parsobisrh_vol_ps','parstgrisrh_vol_ps','periccrh_vol_ps',
-                       'postcnrh_vol_ps','ptcaterh_vol_ps','precnrh_vol_ps','pcrh_vol_ps','rracaterh_vol_ps','rrmdfrrh_vol_ps',
-                       'sufrrh_vol_ps','suplrh_vol_ps','sutmrh_vol_ps','smrh_vol_ps','frpolerh_vol_ps',
-                       'tmpolerh_vol_ps','trvtmrh_vol_ps','insularh_vol_ps')
+                       'tmpolerh_vol_pi','trvtmrh_vol_pi','insularh_vol_pi')
 
 #calculate 95% CIs and create lower and upper bound variables 
 vol_parcel$ci_lower_banksstslh_voli <- vol_parcel$banksstslh_vol_bi - 1.96*vol_parcel$banksstslh_vol_sei 
@@ -2330,827 +2260,631 @@ vol_parcel$ci_upper_trvtmrh_voli <- vol_parcel$trvtmrh_vol_bi + 1.96*vol_parcel$
 vol_parcel$ci_lower_insularh_voli <- vol_parcel$insularh_vol_bi - 1.96*vol_parcel$insularh_vol_sei 
 vol_parcel$ci_upper_insularh_voli <- vol_parcel$insularh_vol_bi + 1.96*vol_parcel$insularh_vol_sei
 
-write.csv(vol_parcel, "Parcel-Wise Cortical Volume MLM Analysis Output Standardized_FINAL.csv") #write csv file
+write.csv(vol_parcel, "Parcel-Wise Cortical Volume MLM Analysis Output Standardized_FINAL_SuppTable7.csv") #write csv file
+
+#FDR correction
+pval_vol_parcel_fdr <- transform(newvolpi, adj.p = p.adjust(as.matrix(newvolpi),method = "BH"))
+sum(pval_vol_parcel_fdr$adj.p<0.05)
+write.csv(pval_vol_parcel_fdr, "FDR adjusted pvalues_volume parcel analysis.csv")
 
 
-#Parcel-wise cortical area analyses
+#Parcel-wise cortical area analyses (68 cortical area parcels)
+#conditional three-level growth model with cortical area parcels predicting the intercept of p factor scores 
+#covariates: sex, age, scanner model dummies
+#standardized betas, standard errors, and p-values for intercepts were saved in a csv file
+#follow-up analysis was conducted with wb_cort_area (total cortical area) included as an additional covariate 
 
-area1 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+area1 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                 site_banksstslh_area_cent + scale(subj_banksstslh_area) + site_banksstslh_area_cent*wave + scale(subj_banksstslh_area)*wave +
                 (1 + wave|site_id/id), 
               data = pfactor_red, 
               control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-area_b1i <- as.data.frame(c(summary(area1)$coefficients[14,1]))
-area_se1i <- as.data.frame(c(summary(area1)$coefficients[14,2]))
-area_p1i <- as.data.frame(c(summary(area1)$coefficients[14,5]))
-area_b1s <- as.data.frame(c(summary(area1)$coefficients[16,1]))
-area_se1s <- as.data.frame(c(summary(area1)$coefficients[16,2]))
-area_p1s <- as.data.frame(c(summary(area1)$coefficients[16,5]))
+area_b1i <- as.data.frame(c(summary(area1)$coefficients[10,1]))
+area_se1i <- as.data.frame(c(summary(area1)$coefficients[10,2]))
+area_p1i <- as.data.frame(c(summary(area1)$coefficients[10,5]))
 
-area2 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+area2 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                 site_cdacatelh_area_cent + scale(subj_cdacatelh_area) + site_cdacatelh_area_cent*wave + scale(subj_cdacatelh_area)*wave +
                 (1 + wave|site_id/id), 
               data = pfactor_red, 
               control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-area_b2i <- as.data.frame(c(summary(area2)$coefficients[14,1]))
-area_se2i <- as.data.frame(c(summary(area2)$coefficients[14,2]))
-area_p2i <- as.data.frame(c(summary(area2)$coefficients[14,5]))
-area_b2s <- as.data.frame(c(summary(area2)$coefficients[16,1]))
-area_se2s <- as.data.frame(c(summary(area2)$coefficients[16,2]))
-area_p2s <- as.data.frame(c(summary(area2)$coefficients[16,5]))
+area_b2i <- as.data.frame(c(summary(area2)$coefficients[10,1]))
+area_se2i <- as.data.frame(c(summary(area2)$coefficients[10,2]))
+area_p2i <- as.data.frame(c(summary(area2)$coefficients[10,5]))
 
-area3 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+area3 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                 site_cdmdfrlh_area_cent + scale(subj_cdmdfrlh_area) + site_cdmdfrlh_area_cent*wave + scale(subj_cdmdfrlh_area)*wave +
                 (1 + wave|site_id/id), 
               data = pfactor_red, 
               control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-area_b3i <- as.data.frame(c(summary(area3)$coefficients[14,1]))
-area_se3i <- as.data.frame(c(summary(area3)$coefficients[14,2]))
-area_p3i <- as.data.frame(c(summary(area3)$coefficients[14,5]))
-area_b3s <- as.data.frame(c(summary(area3)$coefficients[16,1]))
-area_se3s <- as.data.frame(c(summary(area3)$coefficients[16,2]))
-area_p3s <- as.data.frame(c(summary(area3)$coefficients[16,5]))
+area_b3i <- as.data.frame(c(summary(area3)$coefficients[10,1]))
+area_se3i <- as.data.frame(c(summary(area3)$coefficients[10,2]))
+area_p3i <- as.data.frame(c(summary(area3)$coefficients[10,5]))
 
-area4 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+area4 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                 site_cuneuslh_area_cent + scale(subj_cuneuslh_area) + site_cuneuslh_area_cent*wave + scale(subj_cuneuslh_area)*wave +
                 (1 + wave|site_id/id), 
               data = pfactor_red, 
               control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-area_b4i <- as.data.frame(c(summary(area4)$coefficients[14,1]))
-area_se4i <- as.data.frame(c(summary(area4)$coefficients[14,2]))
-area_p4i <- as.data.frame(c(summary(area4)$coefficients[14,5]))
-area_b4s <- as.data.frame(c(summary(area4)$coefficients[16,1]))
-area_se4s <- as.data.frame(c(summary(area4)$coefficients[16,2]))
-area_p4s <- as.data.frame(c(summary(area4)$coefficients[16,5]))
+area_b4i <- as.data.frame(c(summary(area4)$coefficients[10,1]))
+area_se4i <- as.data.frame(c(summary(area4)$coefficients[10,2]))
+area_p4i <- as.data.frame(c(summary(area4)$coefficients[10,5]))
 
-area5 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+area5 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                 site_ehinallh_area_cent + scale(subj_ehinallh_area) + site_ehinallh_area_cent*wave + scale(subj_ehinallh_area)*wave +
                 (1 + wave|site_id/id), 
               data = pfactor_red, 
               control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-area_b5i <- as.data.frame(c(summary(area5)$coefficients[14,1]))
-area_se5i <- as.data.frame(c(summary(area5)$coefficients[14,2]))
-area_p5i <- as.data.frame(c(summary(area5)$coefficients[14,5]))
-area_b5s <- as.data.frame(c(summary(area5)$coefficients[16,1]))
-area_se5s <- as.data.frame(c(summary(area5)$coefficients[16,2]))
-area_p5s <- as.data.frame(c(summary(area5)$coefficients[16,5]))
+area_b5i <- as.data.frame(c(summary(area5)$coefficients[10,1]))
+area_se5i <- as.data.frame(c(summary(area5)$coefficients[10,2]))
+area_p5i <- as.data.frame(c(summary(area5)$coefficients[10,5]))
 
-area6 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+area6 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                 site_fusiformlh_area_cent + scale(subj_fusiformlh_area) + site_fusiformlh_area_cent*wave + scale(subj_fusiformlh_area)*wave +
                 (1 + wave|site_id/id), 
               data = pfactor_red, 
               control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-area_b6i <- as.data.frame(c(summary(area6)$coefficients[14,1]))
-area_se6i <- as.data.frame(c(summary(area6)$coefficients[14,2]))
-area_p6i <- as.data.frame(c(summary(area6)$coefficients[14,5]))
-area_b6s <- as.data.frame(c(summary(area6)$coefficients[16,1]))
-area_se6s <- as.data.frame(c(summary(area6)$coefficients[16,2]))
-area_p6s <- as.data.frame(c(summary(area6)$coefficients[16,5]))
+area_b6i <- as.data.frame(c(summary(area6)$coefficients[10,1]))
+area_se6i <- as.data.frame(c(summary(area6)$coefficients[10,2]))
+area_p6i <- as.data.frame(c(summary(area6)$coefficients[10,5]))
 
-area7 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+area7 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                 site_ifpllh_area_cent + scale(subj_ifpllh_area) + site_ifpllh_area_cent*wave + scale(subj_ifpllh_area)*wave +
                 (1 + wave|site_id/id), 
               data = pfactor_red, 
               control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-area_b7i <- as.data.frame(c(summary(area7)$coefficients[14,1]))
-area_se7i <- as.data.frame(c(summary(area7)$coefficients[14,2]))
-area_p7i <- as.data.frame(c(summary(area7)$coefficients[14,5]))
-area_b7s <- as.data.frame(c(summary(area7)$coefficients[16,1]))
-area_se7s <- as.data.frame(c(summary(area7)$coefficients[16,2]))
-area_p7s <- as.data.frame(c(summary(area7)$coefficients[16,5]))
+area_b7i <- as.data.frame(c(summary(area7)$coefficients[10,1]))
+area_se7i <- as.data.frame(c(summary(area7)$coefficients[10,2]))
+area_p7i <- as.data.frame(c(summary(area7)$coefficients[10,5]))
 
-area8 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+area8 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                 site_iftmlh_area_cent + scale(subj_iftmlh_area) + site_iftmlh_area_cent*wave + scale(subj_iftmlh_area)*wave +
                 (1 + wave|site_id/id), 
               data = pfactor_red, 
               control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-area_b8i <- as.data.frame(c(summary(area8)$coefficients[14,1]))
-area_se8i <- as.data.frame(c(summary(area8)$coefficients[14,2]))
-area_p8i <- as.data.frame(c(summary(area8)$coefficients[14,5]))
-area_b8s <- as.data.frame(c(summary(area8)$coefficients[16,1]))
-area_se8s <- as.data.frame(c(summary(area8)$coefficients[16,2]))
-area_p8s <- as.data.frame(c(summary(area8)$coefficients[16,5]))
+area_b8i <- as.data.frame(c(summary(area8)$coefficients[10,1]))
+area_se8i <- as.data.frame(c(summary(area8)$coefficients[10,2]))
+area_p8i <- as.data.frame(c(summary(area8)$coefficients[10,5]))
 
-area9 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+area9 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                 site_ihcatelh_area_cent + scale(subj_ihcatelh_area) + site_ihcatelh_area_cent*wave + scale(subj_ihcatelh_area)*wave +
                 (1 + wave|site_id/id), 
               data = pfactor_red, 
               control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-area_b9i <- as.data.frame(c(summary(area9)$coefficients[14,1]))
-area_se9i <- as.data.frame(c(summary(area9)$coefficients[14,2]))
-area_p9i <- as.data.frame(c(summary(area9)$coefficients[14,5]))
-area_b9s <- as.data.frame(c(summary(area9)$coefficients[16,1]))
-area_se9s <- as.data.frame(c(summary(area9)$coefficients[16,2]))
-area_p9s <- as.data.frame(c(summary(area9)$coefficients[16,5]))
+area_b9i <- as.data.frame(c(summary(area9)$coefficients[10,1]))
+area_se9i <- as.data.frame(c(summary(area9)$coefficients[10,2]))
+area_p9i <- as.data.frame(c(summary(area9)$coefficients[10,5]))
 
-area10 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+area10 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                  site_locclh_area_cent + scale(subj_locclh_area) + site_locclh_area_cent*wave + scale(subj_locclh_area)*wave +
                  (1 + wave|site_id/id), 
                data = pfactor_red, 
                control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-area_b10i <- as.data.frame(c(summary(area10)$coefficients[14,1]))
-area_se10i <- as.data.frame(c(summary(area10)$coefficients[14,2]))
-area_p10i <- as.data.frame(c(summary(area10)$coefficients[14,5]))
-area_b10s <- as.data.frame(c(summary(area10)$coefficients[16,1]))
-area_se10s <- as.data.frame(c(summary(area10)$coefficients[16,2]))
-area_p10s <- as.data.frame(c(summary(area10)$coefficients[16,5]))
+area_b10i <- as.data.frame(c(summary(area10)$coefficients[10,1]))
+area_se10i <- as.data.frame(c(summary(area10)$coefficients[10,2]))
+area_p10i <- as.data.frame(c(summary(area10)$coefficients[10,5]))
 
-area11 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+area11 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                  site_lobfrlh_area_cent + scale(subj_lobfrlh_area) + site_lobfrlh_area_cent*wave + scale(subj_lobfrlh_area)*wave +
                  (1 + wave|site_id/id), 
                data = pfactor_red, 
                control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-area_b11i <- as.data.frame(c(summary(area11)$coefficients[14,1]))
-area_se11i <- as.data.frame(c(summary(area11)$coefficients[14,2]))
-area_p11i <- as.data.frame(c(summary(area11)$coefficients[14,5]))
-area_b11s <- as.data.frame(c(summary(area11)$coefficients[16,1]))
-area_se11s <- as.data.frame(c(summary(area11)$coefficients[16,2]))
-area_p11s <- as.data.frame(c(summary(area11)$coefficients[16,5]))
+area_b11i <- as.data.frame(c(summary(area11)$coefficients[10,1]))
+area_se11i <- as.data.frame(c(summary(area11)$coefficients[10,2]))
+area_p11i <- as.data.frame(c(summary(area11)$coefficients[10,5]))
 
-area12 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+area12 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                  site_linguallh_area_cent + scale(subj_linguallh_area) + site_linguallh_area_cent*wave + scale(subj_linguallh_area)*wave +
                  (1 + wave|site_id/id), 
                data = pfactor_red, 
                control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-area_b12i <- as.data.frame(c(summary(area12)$coefficients[14,1]))
-area_se12i <- as.data.frame(c(summary(area12)$coefficients[14,2]))
-area_p12i <- as.data.frame(c(summary(area12)$coefficients[14,5]))
-area_b12s <- as.data.frame(c(summary(area12)$coefficients[16,1]))
-area_se12s <- as.data.frame(c(summary(area12)$coefficients[16,2]))
-area_p12s <- as.data.frame(c(summary(area12)$coefficients[16,5]))
+area_b12i <- as.data.frame(c(summary(area12)$coefficients[10,1]))
+area_se12i <- as.data.frame(c(summary(area12)$coefficients[10,2]))
+area_p12i <- as.data.frame(c(summary(area12)$coefficients[10,5]))
 
-area13 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+area13 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                  site_mobfrlh_area_cent + scale(subj_mobfrlh_area) + site_mobfrlh_area_cent*wave + scale(subj_mobfrlh_area)*wave +
                  (1 + wave|site_id/id), 
                data = pfactor_red, 
                control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-area_b13i <- as.data.frame(c(summary(area13)$coefficients[14,1]))
-area_se13i <- as.data.frame(c(summary(area13)$coefficients[14,2]))
-area_p13i <- as.data.frame(c(summary(area13)$coefficients[14,5]))
-area_b13s <- as.data.frame(c(summary(area13)$coefficients[16,1]))
-area_se13s <- as.data.frame(c(summary(area13)$coefficients[16,2]))
-area_p13s <- as.data.frame(c(summary(area13)$coefficients[16,5]))
+area_b13i <- as.data.frame(c(summary(area13)$coefficients[10,1]))
+area_se13i <- as.data.frame(c(summary(area13)$coefficients[10,2]))
+area_p13i <- as.data.frame(c(summary(area13)$coefficients[10,5]))
 
-area14 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+area14 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                  site_mdtmlh_area_cent + scale(subj_mdtmlh_area) + site_mdtmlh_area_cent*wave + scale(subj_mdtmlh_area)*wave +
                  (1 + wave|site_id/id), 
                data = pfactor_red, 
                control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-area_b14i <- as.data.frame(c(summary(area14)$coefficients[14,1]))
-area_se14i <- as.data.frame(c(summary(area14)$coefficients[14,2]))
-area_p14i <- as.data.frame(c(summary(area14)$coefficients[14,5]))
-area_b14s <- as.data.frame(c(summary(area14)$coefficients[16,1]))
-area_se14s <- as.data.frame(c(summary(area14)$coefficients[16,2]))
-area_p14s <- as.data.frame(c(summary(area14)$coefficients[16,5]))
+area_b14i <- as.data.frame(c(summary(area14)$coefficients[10,1]))
+area_se14i <- as.data.frame(c(summary(area14)$coefficients[10,2]))
+area_p14i <- as.data.frame(c(summary(area14)$coefficients[10,5]))
 
-area15 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+area15 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                  site_parahpallh_area_cent + scale(subj_parahpallh_area) + site_parahpallh_area_cent*wave + scale(subj_parahpallh_area)*wave +
                  (1 + wave|site_id/id), 
                data = pfactor_red, 
                control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-area_b15i <- as.data.frame(c(summary(area15)$coefficients[14,1]))
-area_se15i <- as.data.frame(c(summary(area15)$coefficients[14,2]))
-area_p15i <- as.data.frame(c(summary(area15)$coefficients[14,5]))
-area_b15s <- as.data.frame(c(summary(area15)$coefficients[16,1]))
-area_se15s <- as.data.frame(c(summary(area15)$coefficients[16,2]))
-area_p15s <- as.data.frame(c(summary(area15)$coefficients[16,5]))
+area_b15i <- as.data.frame(c(summary(area15)$coefficients[10,1]))
+area_se15i <- as.data.frame(c(summary(area15)$coefficients[10,2]))
+area_p15i <- as.data.frame(c(summary(area15)$coefficients[10,5]))
 
-area16 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+area16 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                  site_paracnlh_area_cent + scale(subj_paracnlh_area) + site_paracnlh_area_cent*wave + scale(subj_paracnlh_area)*wave +
                  (1 + wave|site_id/id), 
                data = pfactor_red, 
                control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-area_b16i <- as.data.frame(c(summary(area16)$coefficients[14,1]))
-area_se16i <- as.data.frame(c(summary(area16)$coefficients[14,2]))
-area_p16i <- as.data.frame(c(summary(area16)$coefficients[14,5]))
-area_b16s <- as.data.frame(c(summary(area16)$coefficients[16,1]))
-area_se16s <- as.data.frame(c(summary(area16)$coefficients[16,2]))
-area_p16s <- as.data.frame(c(summary(area16)$coefficients[16,5]))
+area_b16i <- as.data.frame(c(summary(area16)$coefficients[10,1]))
+area_se16i <- as.data.frame(c(summary(area16)$coefficients[10,2]))
+area_p16i <- as.data.frame(c(summary(area16)$coefficients[10,5]))
 
-area17 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+area17 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                  site_parsopclh_area_cent + scale(subj_parsopclh_area) + site_parsopclh_area_cent*wave + scale(subj_parsopclh_area)*wave +
                  (1 + wave|site_id/id), 
                data = pfactor_red, 
                control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-area_b17i <- as.data.frame(c(summary(area17)$coefficients[14,1]))
-area_se17i <- as.data.frame(c(summary(area17)$coefficients[14,2]))
-area_p17i <- as.data.frame(c(summary(area17)$coefficients[14,5]))
-area_b17s <- as.data.frame(c(summary(area17)$coefficients[16,1]))
-area_se17s <- as.data.frame(c(summary(area17)$coefficients[16,2]))
-area_p17s <- as.data.frame(c(summary(area17)$coefficients[16,5]))
+area_b17i <- as.data.frame(c(summary(area17)$coefficients[10,1]))
+area_se17i <- as.data.frame(c(summary(area17)$coefficients[10,2]))
+area_p17i <- as.data.frame(c(summary(area17)$coefficients[10,5]))
 
-area18 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+area18 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                  site_parsobislh_area_cent + scale(subj_parsobislh_area) + site_parsobislh_area_cent*wave + scale(subj_parsobislh_area)*wave +
                  (1 + wave|site_id/id), 
                data = pfactor_red, 
                control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-area_b18i <- as.data.frame(c(summary(area18)$coefficients[14,1]))
-area_se18i <- as.data.frame(c(summary(area18)$coefficients[14,2]))
-area_p18i <- as.data.frame(c(summary(area18)$coefficients[14,5]))
-area_b18s <- as.data.frame(c(summary(area18)$coefficients[16,1]))
-area_se18s <- as.data.frame(c(summary(area18)$coefficients[16,2]))
-area_p18s <- as.data.frame(c(summary(area18)$coefficients[16,5]))
+area_b18i <- as.data.frame(c(summary(area18)$coefficients[10,1]))
+area_se18i <- as.data.frame(c(summary(area18)$coefficients[10,2]))
+area_p18i <- as.data.frame(c(summary(area18)$coefficients[10,5]))
 
-area19 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+area19 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                  site_parstgrislh_area_cent + scale(subj_parstgrislh_area) + site_parstgrislh_area_cent*wave + scale(subj_parstgrislh_area)*wave +
                  (1 + wave|site_id/id), 
                data = pfactor_red, 
                control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-area_b19i <- as.data.frame(c(summary(area19)$coefficients[14,1]))
-area_se19i <- as.data.frame(c(summary(area19)$coefficients[14,2]))
-area_p19i <- as.data.frame(c(summary(area19)$coefficients[14,5]))
-area_b19s <- as.data.frame(c(summary(area19)$coefficients[16,1]))
-area_se19s <- as.data.frame(c(summary(area19)$coefficients[16,2]))
-area_p19s <- as.data.frame(c(summary(area19)$coefficients[16,5]))
+area_b19i <- as.data.frame(c(summary(area19)$coefficients[10,1]))
+area_se19i <- as.data.frame(c(summary(area19)$coefficients[10,2]))
+area_p19i <- as.data.frame(c(summary(area19)$coefficients[10,5]))
 
-
-area20 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+area20 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                  site_pericclh_area_cent + scale(subj_pericclh_area) + site_pericclh_area_cent*wave + scale(subj_pericclh_area)*wave +
                  (1 + wave|site_id/id), 
                data = pfactor_red, 
                control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-area_b20i <- as.data.frame(c(summary(area20)$coefficients[14,1]))
-area_se20i <- as.data.frame(c(summary(area20)$coefficients[14,2]))
-area_p20i <- as.data.frame(c(summary(area20)$coefficients[14,5]))
-area_b20s <- as.data.frame(c(summary(area20)$coefficients[16,1]))
-area_se20s <- as.data.frame(c(summary(area20)$coefficients[16,2]))
-area_p20s <- as.data.frame(c(summary(area20)$coefficients[16,5]))
+area_b20i <- as.data.frame(c(summary(area20)$coefficients[10,1]))
+area_se20i <- as.data.frame(c(summary(area20)$coefficients[10,2]))
+area_p20i <- as.data.frame(c(summary(area20)$coefficients[10,5]))
 
-area21 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+area21 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                  site_postcnlh_area_cent + scale(subj_postcnlh_area) + site_postcnlh_area_cent*wave + scale(subj_postcnlh_area)*wave +
                  (1 + wave|site_id/id), 
                data = pfactor_red, 
                control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-area_b21i <- as.data.frame(c(summary(area21)$coefficients[14,1]))
-area_se21i <- as.data.frame(c(summary(area21)$coefficients[14,2]))
-area_p21i <- as.data.frame(c(summary(area21)$coefficients[14,5]))
-area_b21s <- as.data.frame(c(summary(area21)$coefficients[16,1]))
-area_se21s <- as.data.frame(c(summary(area21)$coefficients[16,2]))
-area_p21s <- as.data.frame(c(summary(area21)$coefficients[16,5]))
+area_b21i <- as.data.frame(c(summary(area21)$coefficients[10,1]))
+area_se21i <- as.data.frame(c(summary(area21)$coefficients[10,2]))
+area_p21i <- as.data.frame(c(summary(area21)$coefficients[10,5]))
 
-area22 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+area22 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                  site_ptcatelh_area_cent + scale(subj_ptcatelh_area) + site_ptcatelh_area_cent*wave + scale(subj_ptcatelh_area)*wave +
                  (1 + wave|site_id/id), 
                data = pfactor_red, 
                control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-area_b22i <- as.data.frame(c(summary(area22)$coefficients[14,1]))
-area_se22i <- as.data.frame(c(summary(area22)$coefficients[14,2]))
-area_p22i <- as.data.frame(c(summary(area22)$coefficients[14,5]))
-area_b22s <- as.data.frame(c(summary(area22)$coefficients[16,1]))
-area_se22s <- as.data.frame(c(summary(area22)$coefficients[16,2]))
-area_p22s <- as.data.frame(c(summary(area22)$coefficients[16,5]))
+area_b22i <- as.data.frame(c(summary(area22)$coefficients[10,1]))
+area_se22i <- as.data.frame(c(summary(area22)$coefficients[10,2]))
+area_p22i <- as.data.frame(c(summary(area22)$coefficients[10,5]))
 
-area23 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+area23 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                  site_precnlh_area_cent + scale(subj_precnlh_area) + site_precnlh_area_cent*wave + scale(subj_precnlh_area)*wave +
                  (1 + wave|site_id/id), 
                data = pfactor_red, 
                control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-area_b23i <- as.data.frame(c(summary(area23)$coefficients[14,1]))
-area_se23i <- as.data.frame(c(summary(area23)$coefficients[14,2]))
-area_p23i <- as.data.frame(c(summary(area23)$coefficients[14,5]))
-area_b23s <- as.data.frame(c(summary(area23)$coefficients[16,1]))
-area_se23s <- as.data.frame(c(summary(area23)$coefficients[16,2]))
-area_p23s <- as.data.frame(c(summary(area23)$coefficients[16,5]))
+area_b23i <- as.data.frame(c(summary(area23)$coefficients[10,1]))
+area_se23i <- as.data.frame(c(summary(area23)$coefficients[10,2]))
+area_p23i <- as.data.frame(c(summary(area23)$coefficients[10,5]))
 
-area24 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+area24 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                  site_pclh_area_cent + scale(subj_pclh_area) + site_pclh_area_cent*wave + scale(subj_pclh_area)*wave +
                  (1 + wave|site_id/id), 
                data = pfactor_red, 
                control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-area_b24i <- as.data.frame(c(summary(area24)$coefficients[14,1]))
-area_se24i <- as.data.frame(c(summary(area24)$coefficients[14,2]))
-area_p24i <- as.data.frame(c(summary(area24)$coefficients[14,5]))
-area_b24s <- as.data.frame(c(summary(area24)$coefficients[16,1]))
-area_se24s <- as.data.frame(c(summary(area24)$coefficients[16,2]))
-area_p24s <- as.data.frame(c(summary(area24)$coefficients[16,5]))
+area_b24i <- as.data.frame(c(summary(area24)$coefficients[10,1]))
+area_se24i <- as.data.frame(c(summary(area24)$coefficients[10,2]))
+area_p24i <- as.data.frame(c(summary(area24)$coefficients[10,5]))
 
-area25 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+area25 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                  site_rracatelh_area_cent + scale(subj_rracatelh_area) + site_rracatelh_area_cent*wave + scale(subj_rracatelh_area)*wave +
                  (1 + wave|site_id/id), 
                data = pfactor_red, 
                control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-area_b25i <- as.data.frame(c(summary(area25)$coefficients[14,1]))
-area_se25i <- as.data.frame(c(summary(area25)$coefficients[14,2]))
-area_p25i <- as.data.frame(c(summary(area25)$coefficients[14,5]))
-area_b25s <- as.data.frame(c(summary(area25)$coefficients[16,1]))
-area_se25s <- as.data.frame(c(summary(area25)$coefficients[16,2]))
-area_p25s <- as.data.frame(c(summary(area25)$coefficients[16,5]))
+area_b25i <- as.data.frame(c(summary(area25)$coefficients[10,1]))
+area_se25i <- as.data.frame(c(summary(area25)$coefficients[10,2]))
+area_p25i <- as.data.frame(c(summary(area25)$coefficients[10,5]))
 
-area26 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+area26 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                  site_rrmdfrlh_area_cent + scale(subj_rrmdfrlh_area) + site_rrmdfrlh_area_cent*wave + scale(subj_rrmdfrlh_area)*wave +
                  (1 + wave|site_id/id), 
                data = pfactor_red, 
                control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-area_b26i <- as.data.frame(c(summary(area26)$coefficients[14,1]))
-area_se26i <- as.data.frame(c(summary(area26)$coefficients[14,2]))
-area_p26i <- as.data.frame(c(summary(area26)$coefficients[14,5]))
-area_b26s <- as.data.frame(c(summary(area26)$coefficients[16,1]))
-area_se26s <- as.data.frame(c(summary(area26)$coefficients[16,2]))
-area_p26s <- as.data.frame(c(summary(area26)$coefficients[16,5]))
+area_b26i <- as.data.frame(c(summary(area26)$coefficients[10,1]))
+area_se26i <- as.data.frame(c(summary(area26)$coefficients[10,2]))
+area_p26i <- as.data.frame(c(summary(area26)$coefficients[10,5]))
 
-area27 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+area27 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                  site_sufrlh_area_cent + scale(subj_sufrlh_area) + site_sufrlh_area_cent*wave + scale(subj_sufrlh_area)*wave +
                  (1 + wave|site_id/id), 
                data = pfactor_red, 
                control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-area_b27i <- as.data.frame(c(summary(area27)$coefficients[14,1]))
-area_se27i <- as.data.frame(c(summary(area27)$coefficients[14,2]))
-area_p27i <- as.data.frame(c(summary(area27)$coefficients[14,5]))
-area_b27s <- as.data.frame(c(summary(area27)$coefficients[16,1]))
-area_se27s <- as.data.frame(c(summary(area27)$coefficients[16,2]))
-area_p27s <- as.data.frame(c(summary(area27)$coefficients[16,5]))
+area_b27i <- as.data.frame(c(summary(area27)$coefficients[10,1]))
+area_se27i <- as.data.frame(c(summary(area27)$coefficients[10,2]))
+area_p27i <- as.data.frame(c(summary(area27)$coefficients[10,5]))
 
-area28 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+area28 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                  site_supllh_area_cent + scale(subj_supllh_area) + site_supllh_area_cent*wave + scale(subj_supllh_area)*wave +
                  (1 + wave|site_id/id), 
                data = pfactor_red, 
                control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-area_b28i <- as.data.frame(c(summary(area28)$coefficients[14,1]))
-area_se28i <- as.data.frame(c(summary(area28)$coefficients[14,2]))
-area_p28i <- as.data.frame(c(summary(area28)$coefficients[14,5]))
-area_b28s <- as.data.frame(c(summary(area28)$coefficients[16,1]))
-area_se28s <- as.data.frame(c(summary(area28)$coefficients[16,2]))
-area_p28s <- as.data.frame(c(summary(area28)$coefficients[16,5]))
+area_b28i <- as.data.frame(c(summary(area28)$coefficients[10,1]))
+area_se28i <- as.data.frame(c(summary(area28)$coefficients[10,2]))
+area_p28i <- as.data.frame(c(summary(area28)$coefficients[10,5]))
 
-area29 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+area29 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                  site_sutmlh_area_cent + scale(subj_sutmlh_area) + site_sutmlh_area_cent*wave + scale(subj_sutmlh_area)*wave +
                  (1 + wave|site_id/id), 
                data = pfactor_red, 
                control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-area_b29i <- as.data.frame(c(summary(area29)$coefficients[14,1]))
-area_se29i <- as.data.frame(c(summary(area29)$coefficients[14,2]))
-area_p29i <- as.data.frame(c(summary(area29)$coefficients[14,5]))
-area_b29s <- as.data.frame(c(summary(area29)$coefficients[16,1]))
-area_se29s <- as.data.frame(c(summary(area29)$coefficients[16,2]))
-area_p29s <- as.data.frame(c(summary(area29)$coefficients[16,5]))
+area_b29i <- as.data.frame(c(summary(area29)$coefficients[10,1]))
+area_se29i <- as.data.frame(c(summary(area29)$coefficients[10,2]))
+area_p29i <- as.data.frame(c(summary(area29)$coefficients[10,5]))
 
-area30 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+area30 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                  site_smlh_area_cent + scale(subj_smlh_area) + site_smlh_area_cent*wave + scale(subj_smlh_area)*wave +
                  (1 + wave|site_id/id), 
                data = pfactor_red, 
                control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-area_b30i <- as.data.frame(c(summary(area30)$coefficients[14,1]))
-area_se30i <- as.data.frame(c(summary(area30)$coefficients[14,2]))
-area_p30i <- as.data.frame(c(summary(area30)$coefficients[14,5]))
-area_b30s <- as.data.frame(c(summary(area30)$coefficients[16,1]))
-area_se30s <- as.data.frame(c(summary(area30)$coefficients[16,2]))
-area_p30s <- as.data.frame(c(summary(area30)$coefficients[16,5]))
+area_b30i <- as.data.frame(c(summary(area30)$coefficients[10,1]))
+area_se30i <- as.data.frame(c(summary(area30)$coefficients[10,2]))
+area_p30i <- as.data.frame(c(summary(area30)$coefficients[10,5]))
 
-area31 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+area31 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                  site_frpolelh_area_cent + scale(subj_frpolelh_area) + site_frpolelh_area_cent*wave + scale(subj_frpolelh_area)*wave +
                  (1 + wave|site_id/id), 
                data = pfactor_red, 
                control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-area_b31i <- as.data.frame(c(summary(area31)$coefficients[14,1]))
-area_se31i <- as.data.frame(c(summary(area31)$coefficients[14,2]))
-area_p31i <- as.data.frame(c(summary(area31)$coefficients[14,5]))
-area_b31s <- as.data.frame(c(summary(area31)$coefficients[16,1]))
-area_se31s <- as.data.frame(c(summary(area31)$coefficients[16,2]))
-area_p31s <- as.data.frame(c(summary(area31)$coefficients[16,5]))
+area_b31i <- as.data.frame(c(summary(area31)$coefficients[10,1]))
+area_se31i <- as.data.frame(c(summary(area31)$coefficients[10,2]))
+area_p31i <- as.data.frame(c(summary(area31)$coefficients[10,5]))
 
-area32 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+area32 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                  site_tmpolelh_area_cent + scale(subj_tmpolelh_area) + site_tmpolelh_area_cent*wave + scale(subj_tmpolelh_area)*wave +
                  (1 + wave|site_id/id), 
                data = pfactor_red, 
                control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-area_b32i <- as.data.frame(c(summary(area32)$coefficients[14,1]))
-area_se32i <- as.data.frame(c(summary(area32)$coefficients[14,2]))
-area_p32i <- as.data.frame(c(summary(area32)$coefficients[14,5]))
-area_b32s <- as.data.frame(c(summary(area32)$coefficients[16,1]))
-area_se32s <- as.data.frame(c(summary(area32)$coefficients[16,2]))
-area_p32s <- as.data.frame(c(summary(area32)$coefficients[16,5]))
+area_b32i <- as.data.frame(c(summary(area32)$coefficients[10,1]))
+area_se32i <- as.data.frame(c(summary(area32)$coefficients[10,2]))
+area_p32i <- as.data.frame(c(summary(area32)$coefficients[10,5]))
 
-area33 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+area33 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                  site_trvtmlh_area_cent + scale(subj_trvtmlh_area) + site_trvtmlh_area_cent*wave + scale(subj_trvtmlh_area)*wave +
                  (1 + wave|site_id/id), 
                data = pfactor_red, 
                control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-area_b33i <- as.data.frame(c(summary(area33)$coefficients[14,1]))
-area_se33i <- as.data.frame(c(summary(area33)$coefficients[14,2]))
-area_p33i <- as.data.frame(c(summary(area33)$coefficients[14,5]))
-area_b33s <- as.data.frame(c(summary(area33)$coefficients[16,1]))
-area_se33s <- as.data.frame(c(summary(area33)$coefficients[16,2]))
-area_p33s <- as.data.frame(c(summary(area33)$coefficients[16,5]))
+area_b33i <- as.data.frame(c(summary(area33)$coefficients[10,1]))
+area_se33i <- as.data.frame(c(summary(area33)$coefficients[10,2]))
+area_p33i <- as.data.frame(c(summary(area33)$coefficients[10,5]))
 
-area34 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+area34 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                  site_insulalh_area_cent + scale(subj_insulalh_area) + site_insulalh_area_cent*wave + scale(subj_insulalh_area)*wave +
                  (1 + wave|site_id/id), 
                data = pfactor_red, 
                control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-area_b34i <- as.data.frame(c(summary(area34)$coefficients[14,1]))
-area_se34i <- as.data.frame(c(summary(area34)$coefficients[14,2]))
-area_p34i <- as.data.frame(c(summary(area34)$coefficients[14,5]))
-area_b34s <- as.data.frame(c(summary(area34)$coefficients[16,1]))
-area_se34s <- as.data.frame(c(summary(area34)$coefficients[16,2]))
-area_p34s <- as.data.frame(c(summary(area34)$coefficients[16,5]))
+area_b34i <- as.data.frame(c(summary(area34)$coefficients[10,1]))
+area_se34i <- as.data.frame(c(summary(area34)$coefficients[10,2]))
+area_p34i <- as.data.frame(c(summary(area34)$coefficients[10,5]))
 
-area35 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+area35 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                  site_banksstsrh_area_cent + scale(subj_banksstsrh_area) + site_banksstsrh_area_cent*wave + scale(subj_banksstsrh_area)*wave +
                  (1 + wave|site_id/id), 
                data = pfactor_red, 
                control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-area_b35i <- as.data.frame(c(summary(area35)$coefficients[14,1]))
-area_se35i <- as.data.frame(c(summary(area35)$coefficients[14,2]))
-area_p35i <- as.data.frame(c(summary(area35)$coefficients[14,5]))
-area_b35s <- as.data.frame(c(summary(area35)$coefficients[16,1]))
-area_se35s <- as.data.frame(c(summary(area35)$coefficients[16,2]))
-area_p35s <- as.data.frame(c(summary(area35)$coefficients[16,5]))
+area_b35i <- as.data.frame(c(summary(area35)$coefficients[10,1]))
+area_se35i <- as.data.frame(c(summary(area35)$coefficients[10,2]))
+area_p35i <- as.data.frame(c(summary(area35)$coefficients[10,5]))
 
-area36 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+area36 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                  site_cdacaterh_area_cent + scale(subj_cdacaterh_area) + site_cdacaterh_area_cent*wave + scale(subj_cdacaterh_area)*wave +
                  (1 + wave|site_id/id), 
                data = pfactor_red, 
                control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-area_b36i <- as.data.frame(c(summary(area36)$coefficients[14,1]))
-area_se36i <- as.data.frame(c(summary(area36)$coefficients[14,2]))
-area_p36i <- as.data.frame(c(summary(area36)$coefficients[14,5]))
-area_b36s <- as.data.frame(c(summary(area36)$coefficients[16,1]))
-area_se36s <- as.data.frame(c(summary(area36)$coefficients[16,2]))
-area_p36s <- as.data.frame(c(summary(area36)$coefficients[16,5]))
+area_b36i <- as.data.frame(c(summary(area36)$coefficients[10,1]))
+area_se36i <- as.data.frame(c(summary(area36)$coefficients[10,2]))
+area_p36i <- as.data.frame(c(summary(area36)$coefficients[10,5]))
 
-area37 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+area37 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                  site_cdmdfrrh_area_cent + scale(subj_cdmdfrrh_area) + site_cdmdfrrh_area_cent*wave + scale(subj_cdmdfrrh_area)*wave +
                  (1 + wave|site_id/id), 
                data = pfactor_red, 
                control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-area_b37i <- as.data.frame(c(summary(area37)$coefficients[14,1]))
-area_se37i <- as.data.frame(c(summary(area37)$coefficients[14,2]))
-area_p37i <- as.data.frame(c(summary(area37)$coefficients[14,5]))
-area_b37s <- as.data.frame(c(summary(area37)$coefficients[16,1]))
-area_se37s <- as.data.frame(c(summary(area37)$coefficients[16,2]))
-area_p37s <- as.data.frame(c(summary(area37)$coefficients[16,5]))
+area_b37i <- as.data.frame(c(summary(area37)$coefficients[10,1]))
+area_se37i <- as.data.frame(c(summary(area37)$coefficients[10,2]))
+area_p37i <- as.data.frame(c(summary(area37)$coefficients[10,5]))
 
-area38 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+area38 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                  site_cuneusrh_area_cent + scale(subj_cuneusrh_area) + site_cuneusrh_area_cent*wave + scale(subj_cuneusrh_area)*wave +
                  (1 + wave|site_id/id), 
                data = pfactor_red, 
                control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-area_b38i <- as.data.frame(c(summary(area38)$coefficients[14,1]))
-area_se38i <- as.data.frame(c(summary(area38)$coefficients[14,2]))
-area_p38i <- as.data.frame(c(summary(area38)$coefficients[14,5]))
-area_b38s <- as.data.frame(c(summary(area38)$coefficients[16,1]))
-area_se38s <- as.data.frame(c(summary(area38)$coefficients[16,2]))
-area_p38s <- as.data.frame(c(summary(area38)$coefficients[16,5]))
+area_b38i <- as.data.frame(c(summary(area38)$coefficients[10,1]))
+area_se38i <- as.data.frame(c(summary(area38)$coefficients[10,2]))
+area_p38i <- as.data.frame(c(summary(area38)$coefficients[10,5]))
 
-area39 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+area39 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                  site_ehinalrh_area_cent + scale(subj_ehinalrh_area) + site_ehinalrh_area_cent*wave + scale(subj_ehinalrh_area)*wave +
                  (1 + wave|site_id/id), 
                data = pfactor_red, 
                control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-area_b39i <- as.data.frame(c(summary(area39)$coefficients[14,1]))
-area_se39i <- as.data.frame(c(summary(area39)$coefficients[14,2]))
-area_p39i <- as.data.frame(c(summary(area39)$coefficients[14,5]))
-area_b39s <- as.data.frame(c(summary(area39)$coefficients[16,1]))
-area_se39s <- as.data.frame(c(summary(area39)$coefficients[16,2]))
-area_p39s <- as.data.frame(c(summary(area39)$coefficients[16,5]))
+area_b39i <- as.data.frame(c(summary(area39)$coefficients[10,1]))
+area_se39i <- as.data.frame(c(summary(area39)$coefficients[10,2]))
+area_p39i <- as.data.frame(c(summary(area39)$coefficients[10,5]))
 
-area40 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+area40 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                  site_fusiformrh_area_cent + scale(subj_fusiformrh_area) + site_fusiformrh_area_cent*wave + scale(subj_fusiformrh_area)*wave +
                  (1 + wave|site_id/id), 
                data = pfactor_red, 
                control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-area_b40i <- as.data.frame(c(summary(area40)$coefficients[14,1]))
-area_se40i <- as.data.frame(c(summary(area40)$coefficients[14,2]))
-area_p40i <- as.data.frame(c(summary(area40)$coefficients[14,5]))
-area_b40s <- as.data.frame(c(summary(area40)$coefficients[16,1]))
-area_se40s <- as.data.frame(c(summary(area40)$coefficients[16,2]))
-area_p40s <- as.data.frame(c(summary(area40)$coefficients[16,5]))
+area_b40i <- as.data.frame(c(summary(area40)$coefficients[10,1]))
+area_se40i <- as.data.frame(c(summary(area40)$coefficients[10,2]))
+area_p40i <- as.data.frame(c(summary(area40)$coefficients[10,5]))
 
-area41 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+area41 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                  site_ifplrh_area_cent + scale(subj_ifplrh_area) + site_ifplrh_area_cent*wave + scale(subj_ifplrh_area)*wave +
                  (1 + wave|site_id/id), 
                data = pfactor_red, 
                control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-area_b41i <- as.data.frame(c(summary(area41)$coefficients[14,1]))
-area_se41i <- as.data.frame(c(summary(area41)$coefficients[14,2]))
-area_p41i <- as.data.frame(c(summary(area41)$coefficients[14,5]))
-area_b41s <- as.data.frame(c(summary(area41)$coefficients[16,1]))
-area_se41s <- as.data.frame(c(summary(area41)$coefficients[16,2]))
-area_p41s <- as.data.frame(c(summary(area41)$coefficients[16,5]))
+area_b41i <- as.data.frame(c(summary(area41)$coefficients[10,1]))
+area_se41i <- as.data.frame(c(summary(area41)$coefficients[10,2]))
+area_p41i <- as.data.frame(c(summary(area41)$coefficients[10,5]))
 
-area42 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+area42 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                  site_iftmrh_area_cent + scale(subj_iftmrh_area) + site_iftmrh_area_cent*wave + scale(subj_iftmrh_area)*wave +
                  (1 + wave|site_id/id), 
                data = pfactor_red, 
                control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-area_b42i <- as.data.frame(c(summary(area42)$coefficients[14,1]))
-area_se42i <- as.data.frame(c(summary(area42)$coefficients[14,2]))
-area_p42i <- as.data.frame(c(summary(area42)$coefficients[14,5]))
-area_b42s <- as.data.frame(c(summary(area42)$coefficients[16,1]))
-area_se42s <- as.data.frame(c(summary(area42)$coefficients[16,2]))
-area_p42s <- as.data.frame(c(summary(area42)$coefficients[16,5]))
+area_b42i <- as.data.frame(c(summary(area42)$coefficients[10,1]))
+area_se42i <- as.data.frame(c(summary(area42)$coefficients[10,2]))
+area_p42i <- as.data.frame(c(summary(area42)$coefficients[10,5]))
 
-area43 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+area43 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                  site_ihcaterh_area_cent + scale(subj_ihcaterh_area) + site_ihcaterh_area_cent*wave + scale(subj_ihcaterh_area)*wave +
                  (1 + wave|site_id/id), 
                data = pfactor_red, 
                control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-area_b43i <- as.data.frame(c(summary(area43)$coefficients[14,1]))
-area_se43i <- as.data.frame(c(summary(area43)$coefficients[14,2]))
-area_p43i <- as.data.frame(c(summary(area43)$coefficients[14,5]))
-area_b43s <- as.data.frame(c(summary(area43)$coefficients[16,1]))
-area_se43s <- as.data.frame(c(summary(area43)$coefficients[16,2]))
-area_p43s <- as.data.frame(c(summary(area43)$coefficients[16,5]))
+area_b43i <- as.data.frame(c(summary(area43)$coefficients[10,1]))
+area_se43i <- as.data.frame(c(summary(area43)$coefficients[10,2]))
+area_p43i <- as.data.frame(c(summary(area43)$coefficients[10,5]))
 
-area44 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+area44 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                  site_loccrh_area_cent + scale(subj_loccrh_area) + site_loccrh_area_cent*wave + scale(subj_loccrh_area)*wave +
                  (1 + wave|site_id/id), 
                data = pfactor_red, 
                control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-area_b44i <- as.data.frame(c(summary(area44)$coefficients[14,1]))
-area_se44i <- as.data.frame(c(summary(area44)$coefficients[14,2]))
-area_p44i <- as.data.frame(c(summary(area44)$coefficients[14,5]))
-area_b44s <- as.data.frame(c(summary(area44)$coefficients[16,1]))
-area_se44s <- as.data.frame(c(summary(area44)$coefficients[16,2]))
-area_p44s <- as.data.frame(c(summary(area44)$coefficients[16,5]))
+area_b44i <- as.data.frame(c(summary(area44)$coefficients[10,1]))
+area_se44i <- as.data.frame(c(summary(area44)$coefficients[10,2]))
+area_p44i <- as.data.frame(c(summary(area44)$coefficients[10,5]))
 
-area45 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+area45 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                  site_lobfrrh_area_cent + scale(subj_lobfrrh_area) + site_lobfrrh_area_cent*wave + scale(subj_lobfrrh_area)*wave +
                  (1 + wave|site_id/id), 
                data = pfactor_red, 
                control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-area_b45i <- as.data.frame(c(summary(area45)$coefficients[14,1]))
-area_se45i <- as.data.frame(c(summary(area45)$coefficients[14,2]))
-area_p45i <- as.data.frame(c(summary(area45)$coefficients[14,5]))
-area_b45s <- as.data.frame(c(summary(area45)$coefficients[16,1]))
-area_se45s <- as.data.frame(c(summary(area45)$coefficients[16,2]))
-area_p45s <- as.data.frame(c(summary(area45)$coefficients[16,5]))
+area_b45i <- as.data.frame(c(summary(area45)$coefficients[10,1]))
+area_se45i <- as.data.frame(c(summary(area45)$coefficients[10,2]))
+area_p45i <- as.data.frame(c(summary(area45)$coefficients[10,5]))
 
-area46 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+area46 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                  site_lingualrh_area_cent + scale(subj_lingualrh_area) + site_lingualrh_area_cent*wave + scale(subj_lingualrh_area)*wave +
                  (1 + wave|site_id/id), 
                data = pfactor_red, 
                control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-area_b46i <- as.data.frame(c(summary(area46)$coefficients[14,1]))
-area_se46i <- as.data.frame(c(summary(area46)$coefficients[14,2]))
-area_p46i <- as.data.frame(c(summary(area46)$coefficients[14,5]))
-area_b46s <- as.data.frame(c(summary(area46)$coefficients[16,1]))
-area_se46s <- as.data.frame(c(summary(area46)$coefficients[16,2]))
-area_p46s <- as.data.frame(c(summary(area46)$coefficients[16,5]))
+area_b46i <- as.data.frame(c(summary(area46)$coefficients[10,1]))
+area_se46i <- as.data.frame(c(summary(area46)$coefficients[10,2]))
+area_p46i <- as.data.frame(c(summary(area46)$coefficients[10,5]))
 
-area47 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+area47 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                  site_mobfrrh_area_cent + scale(subj_mobfrrh_area) + site_mobfrrh_area_cent*wave + scale(subj_mobfrrh_area)*wave +
                  (1 + wave|site_id/id), 
                data = pfactor_red, 
                control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-area_b47i <- as.data.frame(c(summary(area47)$coefficients[14,1]))
-area_se47i <- as.data.frame(c(summary(area47)$coefficients[14,2]))
-area_p47i <- as.data.frame(c(summary(area47)$coefficients[14,5]))
-area_b47s <- as.data.frame(c(summary(area47)$coefficients[16,1]))
-area_se47s <- as.data.frame(c(summary(area47)$coefficients[16,2]))
-area_p47s <- as.data.frame(c(summary(area47)$coefficients[16,5]))
+area_b47i <- as.data.frame(c(summary(area47)$coefficients[10,1]))
+area_se47i <- as.data.frame(c(summary(area47)$coefficients[10,2]))
+area_p47i <- as.data.frame(c(summary(area47)$coefficients[10,5]))
 
-area48 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+area48 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                  site_mdtmrh_area_cent + scale(subj_mdtmrh_area) + site_mdtmrh_area_cent*wave + scale(subj_mdtmrh_area)*wave +
                  (1 + wave|site_id/id), 
                data = pfactor_red, 
                control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-area_b48i <- as.data.frame(c(summary(area48)$coefficients[14,1]))
-area_se48i <- as.data.frame(c(summary(area48)$coefficients[14,2]))
-area_p48i <- as.data.frame(c(summary(area48)$coefficients[14,5]))
-area_b48s <- as.data.frame(c(summary(area48)$coefficients[16,1]))
-area_se48s <- as.data.frame(c(summary(area48)$coefficients[16,2]))
-area_p48s <- as.data.frame(c(summary(area48)$coefficients[16,5]))
+area_b48i <- as.data.frame(c(summary(area48)$coefficients[10,1]))
+area_se48i <- as.data.frame(c(summary(area48)$coefficients[10,2]))
+area_p48i <- as.data.frame(c(summary(area48)$coefficients[10,5]))
 
-area49 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+area49 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                  site_parahpalrh_area_cent + scale(subj_parahpalrh_area) + site_parahpalrh_area_cent*wave + scale(subj_parahpalrh_area)*wave +
                  (1 + wave|site_id/id), 
                data = pfactor_red, 
                control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-area_b49i <- as.data.frame(c(summary(area49)$coefficients[14,1]))
-area_se49i <- as.data.frame(c(summary(area49)$coefficients[14,2]))
-area_p49i <- as.data.frame(c(summary(area49)$coefficients[14,5]))
-area_b49s <- as.data.frame(c(summary(area49)$coefficients[16,1]))
-area_se49s <- as.data.frame(c(summary(area49)$coefficients[16,2]))
-area_p49s <- as.data.frame(c(summary(area49)$coefficients[16,5]))
+area_b49i <- as.data.frame(c(summary(area49)$coefficients[10,1]))
+area_se49i <- as.data.frame(c(summary(area49)$coefficients[10,2]))
+area_p49i <- as.data.frame(c(summary(area49)$coefficients[10,5]))
 
-area50 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+area50 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                  site_paracnrh_area_cent + scale(subj_paracnrh_area) + site_paracnrh_area_cent*wave + scale(subj_paracnrh_area)*wave +
                  (1 + wave|site_id/id), 
                data = pfactor_red, 
                control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-area_b50i <- as.data.frame(c(summary(area50)$coefficients[14,1]))
-area_se50i <- as.data.frame(c(summary(area50)$coefficients[14,2]))
-area_p50i <- as.data.frame(c(summary(area50)$coefficients[14,5]))
-area_b50s <- as.data.frame(c(summary(area50)$coefficients[16,1]))
-area_se50s <- as.data.frame(c(summary(area50)$coefficients[16,2]))
-area_p50s <- as.data.frame(c(summary(area50)$coefficients[16,5]))
+area_b50i <- as.data.frame(c(summary(area50)$coefficients[10,1]))
+area_se50i <- as.data.frame(c(summary(area50)$coefficients[10,2]))
+area_p50i <- as.data.frame(c(summary(area50)$coefficients[10,5]))
 
-area51 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+area51 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                  site_parsopcrh_area_cent + scale(subj_parsopcrh_area) + site_parsopcrh_area_cent*wave + scale(subj_parsopcrh_area)*wave +
                  (1 + wave|site_id/id), 
                data = pfactor_red, 
                control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-area_b51i <- as.data.frame(c(summary(area51)$coefficients[14,1]))
-area_se51i <- as.data.frame(c(summary(area51)$coefficients[14,2]))
-area_p51i <- as.data.frame(c(summary(area51)$coefficients[14,5]))
-area_b51s <- as.data.frame(c(summary(area51)$coefficients[16,1]))
-area_se51s <- as.data.frame(c(summary(area51)$coefficients[16,2]))
-area_p51s <- as.data.frame(c(summary(area51)$coefficients[16,5]))
+area_b51i <- as.data.frame(c(summary(area51)$coefficients[10,1]))
+area_se51i <- as.data.frame(c(summary(area51)$coefficients[10,2]))
+area_p51i <- as.data.frame(c(summary(area51)$coefficients[10,5]))
 
-area52 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+area52 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                  site_parsobisrh_area_cent + scale(subj_parsobisrh_area) + site_parsobisrh_area_cent*wave + scale(subj_parsobisrh_area)*wave +
                  (1 + wave|site_id/id), 
                data = pfactor_red, 
                control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-area_b52i <- as.data.frame(c(summary(area52)$coefficients[14,1]))
-area_se52i <- as.data.frame(c(summary(area52)$coefficients[14,2]))
-area_p52i <- as.data.frame(c(summary(area52)$coefficients[14,5]))
-area_b52s <- as.data.frame(c(summary(area52)$coefficients[16,1]))
-area_se52s <- as.data.frame(c(summary(area52)$coefficients[16,2]))
-area_p52s <- as.data.frame(c(summary(area52)$coefficients[16,5]))
+area_b52i <- as.data.frame(c(summary(area52)$coefficients[10,1]))
+area_se52i <- as.data.frame(c(summary(area52)$coefficients[10,2]))
+area_p52i <- as.data.frame(c(summary(area52)$coefficients[10,5]))
 
-area53 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+area53 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                  site_parstgrisrh_area_cent + scale(subj_parstgrisrh_area) + site_parstgrisrh_area_cent*wave + scale(subj_parstgrisrh_area)*wave +
                  (1 + wave|site_id/id), 
                data = pfactor_red, 
                control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-area_b53i <- as.data.frame(c(summary(area53)$coefficients[14,1]))
-area_se53i <- as.data.frame(c(summary(area53)$coefficients[14,2]))
-area_p53i <- as.data.frame(c(summary(area53)$coefficients[14,5]))
-area_b53s <- as.data.frame(c(summary(area53)$coefficients[16,1]))
-area_se53s <- as.data.frame(c(summary(area53)$coefficients[16,2]))
-area_p53s <- as.data.frame(c(summary(area53)$coefficients[16,5]))
+area_b53i <- as.data.frame(c(summary(area53)$coefficients[10,1]))
+area_se53i <- as.data.frame(c(summary(area53)$coefficients[10,2]))
+area_p53i <- as.data.frame(c(summary(area53)$coefficients[10,5]))
 
-area54 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+area54 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                  site_periccrh_area_cent + scale(subj_periccrh_area) + site_periccrh_area_cent*wave + scale(subj_periccrh_area)*wave +
                  (1 + wave|site_id/id), 
                data = pfactor_red, 
                control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-area_b54i <- as.data.frame(c(summary(area54)$coefficients[14,1]))
-area_se54i <- as.data.frame(c(summary(area54)$coefficients[14,2]))
-area_p54i <- as.data.frame(c(summary(area54)$coefficients[14,5]))
-area_b54s <- as.data.frame(c(summary(area54)$coefficients[16,1]))
-area_se54s <- as.data.frame(c(summary(area54)$coefficients[16,2]))
-area_p54s <- as.data.frame(c(summary(area54)$coefficients[16,5]))
+area_b54i <- as.data.frame(c(summary(area54)$coefficients[10,1]))
+area_se54i <- as.data.frame(c(summary(area54)$coefficients[10,2]))
+area_p54i <- as.data.frame(c(summary(area54)$coefficients[10,5]))
 
-area55 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+area55 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                  site_postcnrh_area_cent + scale(subj_postcnrh_area) + site_postcnrh_area_cent*wave + scale(subj_postcnrh_area)*wave +
                  (1 + wave|site_id/id), 
                data = pfactor_red, 
                control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-area_b55i <- as.data.frame(c(summary(area55)$coefficients[14,1]))
-area_se55i <- as.data.frame(c(summary(area55)$coefficients[14,2]))
-area_p55i <- as.data.frame(c(summary(area55)$coefficients[14,5]))
-area_b55s <- as.data.frame(c(summary(area55)$coefficients[16,1]))
-area_se55s <- as.data.frame(c(summary(area55)$coefficients[16,2]))
-area_p55s <- as.data.frame(c(summary(area55)$coefficients[16,5]))
+area_b55i <- as.data.frame(c(summary(area55)$coefficients[10,1]))
+area_se55i <- as.data.frame(c(summary(area55)$coefficients[10,2]))
+area_p55i <- as.data.frame(c(summary(area55)$coefficients[10,5]))
 
-area56 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+area56 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                  site_ptcaterh_area_cent + scale(subj_ptcaterh_area) + site_ptcaterh_area_cent*wave + scale(subj_ptcaterh_area)*wave +
                  (1 + wave|site_id/id), 
                data = pfactor_red, 
                control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-area_b56i <- as.data.frame(c(summary(area56)$coefficients[14,1]))
-area_se56i <- as.data.frame(c(summary(area56)$coefficients[14,2]))
-area_p56i <- as.data.frame(c(summary(area56)$coefficients[14,5]))
-area_b56s <- as.data.frame(c(summary(area56)$coefficients[16,1]))
-area_se56s <- as.data.frame(c(summary(area56)$coefficients[16,2]))
-area_p56s <- as.data.frame(c(summary(area56)$coefficients[16,5]))
+area_b56i <- as.data.frame(c(summary(area56)$coefficients[10,1]))
+area_se56i <- as.data.frame(c(summary(area56)$coefficients[10,2]))
+area_p56i <- as.data.frame(c(summary(area56)$coefficients[10,5]))
 
-area57 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+area57 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                  site_precnrh_area_cent + scale(subj_precnrh_area) + site_precnrh_area_cent*wave + scale(subj_precnrh_area)*wave +
                  (1 + wave|site_id/id), 
                data = pfactor_red, 
                control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-area_b57i <- as.data.frame(c(summary(area57)$coefficients[14,1]))
-area_se57i <- as.data.frame(c(summary(area57)$coefficients[14,2]))
-area_p57i <- as.data.frame(c(summary(area57)$coefficients[14,5]))
-area_b57s <- as.data.frame(c(summary(area57)$coefficients[16,1]))
-area_se57s <- as.data.frame(c(summary(area57)$coefficients[16,2]))
-area_p57s <- as.data.frame(c(summary(area57)$coefficients[16,5]))
+area_b57i <- as.data.frame(c(summary(area57)$coefficients[10,1]))
+area_se57i <- as.data.frame(c(summary(area57)$coefficients[10,2]))
+area_p57i <- as.data.frame(c(summary(area57)$coefficients[10,5]))
 
-area58 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+area58 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                  site_pcrh_area_cent + scale(subj_pcrh_area) + site_pcrh_area_cent*wave + scale(subj_pcrh_area)*wave +
                  (1 + wave|site_id/id), 
                data = pfactor_red, 
                control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-area_b58i <- as.data.frame(c(summary(area58)$coefficients[14,1]))
-area_se58i <- as.data.frame(c(summary(area58)$coefficients[14,2]))
-area_p58i <- as.data.frame(c(summary(area58)$coefficients[14,5]))
-area_b58s <- as.data.frame(c(summary(area58)$coefficients[16,1]))
-area_se58s <- as.data.frame(c(summary(area58)$coefficients[16,2]))
-area_p58s <- as.data.frame(c(summary(area58)$coefficients[16,5]))
+area_b58i <- as.data.frame(c(summary(area58)$coefficients[10,1]))
+area_se58i <- as.data.frame(c(summary(area58)$coefficients[10,2]))
+area_p58i <- as.data.frame(c(summary(area58)$coefficients[10,5]))
 
-area59 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+area59 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                  site_rracaterh_area_cent + scale(subj_rracaterh_area) + site_rracaterh_area_cent*wave + scale(subj_rracaterh_area)*wave +
                  (1 + wave|site_id/id), 
                data = pfactor_red, 
                control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-area_b59i <- as.data.frame(c(summary(area59)$coefficients[14,1]))
-area_se59i <- as.data.frame(c(summary(area59)$coefficients[14,2]))
-area_p59i <- as.data.frame(c(summary(area59)$coefficients[14,5]))
-area_b59s <- as.data.frame(c(summary(area59)$coefficients[16,1]))
-area_se59s <- as.data.frame(c(summary(area59)$coefficients[16,2]))
-area_p59s <- as.data.frame(c(summary(area59)$coefficients[16,5]))
+area_b59i <- as.data.frame(c(summary(area59)$coefficients[10,1]))
+area_se59i <- as.data.frame(c(summary(area59)$coefficients[10,2]))
+area_p59i <- as.data.frame(c(summary(area59)$coefficients[10,5]))
 
-area60 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+area60 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                  site_rrmdfrrh_area_cent + scale(subj_rrmdfrrh_area) + site_rrmdfrrh_area_cent*wave + scale(subj_rrmdfrrh_area)*wave +
                  (1 + wave|site_id/id), 
                data = pfactor_red, 
                control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-area_b60i <- as.data.frame(c(summary(area60)$coefficients[14,1]))
-area_se60i <- as.data.frame(c(summary(area60)$coefficients[14,2]))
-area_p60i <- as.data.frame(c(summary(area60)$coefficients[14,5]))
-area_b60s <- as.data.frame(c(summary(area60)$coefficients[16,1]))
-area_se60s <- as.data.frame(c(summary(area60)$coefficients[16,2]))
-area_p60s <- as.data.frame(c(summary(area60)$coefficients[16,5]))
+area_b60i <- as.data.frame(c(summary(area60)$coefficients[10,1]))
+area_se60i <- as.data.frame(c(summary(area60)$coefficients[10,2]))
+area_p60i <- as.data.frame(c(summary(area60)$coefficients[10,5]))
 
-area61 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+area61 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                  site_sufrrh_area_cent + scale(subj_sufrrh_area) + site_sufrrh_area_cent*wave + scale(subj_sufrrh_area)*wave +
                  (1 + wave|site_id/id), 
                data = pfactor_red, 
                control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-area_b61i <- as.data.frame(c(summary(area61)$coefficients[14,1]))
-area_se61i <- as.data.frame(c(summary(area61)$coefficients[14,2]))
-area_p61i <- as.data.frame(c(summary(area61)$coefficients[14,5]))
-area_b61s <- as.data.frame(c(summary(area61)$coefficients[16,1]))
-area_se61s <- as.data.frame(c(summary(area61)$coefficients[16,2]))
-area_p61s <- as.data.frame(c(summary(area61)$coefficients[16,5]))
+area_b61i <- as.data.frame(c(summary(area61)$coefficients[10,1]))
+area_se61i <- as.data.frame(c(summary(area61)$coefficients[10,2]))
+area_p61i <- as.data.frame(c(summary(area61)$coefficients[10,5]))
 
-area62 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+area62 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                  site_suplrh_area_cent + scale(subj_suplrh_area) + site_suplrh_area_cent*wave + scale(subj_suplrh_area)*wave +
                  (1 + wave|site_id/id), 
                data = pfactor_red, 
                control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-area_b62i <- as.data.frame(c(summary(area62)$coefficients[14,1]))
-area_se62i <- as.data.frame(c(summary(area62)$coefficients[14,2]))
-area_p62i <- as.data.frame(c(summary(area62)$coefficients[14,5]))
-area_b62s <- as.data.frame(c(summary(area62)$coefficients[16,1]))
-area_se62s <- as.data.frame(c(summary(area62)$coefficients[16,2]))
-area_p62s <- as.data.frame(c(summary(area62)$coefficients[16,5]))
+area_b62i <- as.data.frame(c(summary(area62)$coefficients[10,1]))
+area_se62i <- as.data.frame(c(summary(area62)$coefficients[10,2]))
+area_p62i <- as.data.frame(c(summary(area62)$coefficients[10,5]))
 
-area63 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+area63 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                  site_sutmrh_area_cent + scale(subj_sutmrh_area) + site_sutmrh_area_cent*wave + scale(subj_sutmrh_area)*wave +
                  (1 + wave|site_id/id), 
                data = pfactor_red, 
                control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-area_b63i <- as.data.frame(c(summary(area63)$coefficients[14,1]))
-area_se63i <- as.data.frame(c(summary(area63)$coefficients[14,2]))
-area_p63i <- as.data.frame(c(summary(area63)$coefficients[14,5]))
-area_b63s <- as.data.frame(c(summary(area63)$coefficients[16,1]))
-area_se63s <- as.data.frame(c(summary(area63)$coefficients[16,2]))
-area_p63s <- as.data.frame(c(summary(area63)$coefficients[16,5]))
+area_b63i <- as.data.frame(c(summary(area63)$coefficients[10,1]))
+area_se63i <- as.data.frame(c(summary(area63)$coefficients[10,2]))
+area_p63i <- as.data.frame(c(summary(area63)$coefficients[10,5]))
 
-area64 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+area64 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                  site_smrh_area_cent + scale(subj_smrh_area) + site_smrh_area_cent*wave + scale(subj_smrh_area)*wave +
                  (1 + wave|site_id/id), 
                data = pfactor_red, 
                control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-area_b64i <- as.data.frame(c(summary(area64)$coefficients[14,1]))
-area_se64i <- as.data.frame(c(summary(area64)$coefficients[14,2]))
-area_p64i <- as.data.frame(c(summary(area64)$coefficients[14,5]))
-area_b64s <- as.data.frame(c(summary(area64)$coefficients[16,1]))
-area_se64s <- as.data.frame(c(summary(area64)$coefficients[16,2]))
-area_p64s <- as.data.frame(c(summary(area64)$coefficients[16,5]))
+area_b64i <- as.data.frame(c(summary(area64)$coefficients[10,1]))
+area_se64i <- as.data.frame(c(summary(area64)$coefficients[10,2]))
+area_p64i <- as.data.frame(c(summary(area64)$coefficients[10,5]))
 
-area65 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+area65 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                  site_frpolerh_area_cent + scale(subj_frpolerh_area) + site_frpolerh_area_cent*wave + scale(subj_frpolerh_area)*wave +
                  (1 + wave|site_id/id), 
                data = pfactor_red, 
                control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-area_b65i <- as.data.frame(c(summary(area65)$coefficients[14,1]))
-area_se65i <- as.data.frame(c(summary(area65)$coefficients[14,2]))
-area_p65i <- as.data.frame(c(summary(area65)$coefficients[14,5]))
-area_b65s <- as.data.frame(c(summary(area65)$coefficients[16,1]))
-area_se65s <- as.data.frame(c(summary(area65)$coefficients[16,2]))
-area_p65s <- as.data.frame(c(summary(area65)$coefficients[16,5]))
+area_b65i <- as.data.frame(c(summary(area65)$coefficients[10,1]))
+area_se65i <- as.data.frame(c(summary(area65)$coefficients[10,2]))
+area_p65i <- as.data.frame(c(summary(area65)$coefficients[10,5]))
 
-area66 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+area66 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                  site_tmpolerh_area_cent + scale(subj_tmpolerh_area) + site_tmpolerh_area_cent*wave + scale(subj_tmpolerh_area)*wave +
                  (1 + wave|site_id/id), 
                data = pfactor_red, 
                control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-area_b66i <- as.data.frame(c(summary(area66)$coefficients[14,1]))
-area_se66i <- as.data.frame(c(summary(area66)$coefficients[14,2]))
-area_p66i <- as.data.frame(c(summary(area66)$coefficients[14,5]))
-area_b66s <- as.data.frame(c(summary(area66)$coefficients[16,1]))
-area_se66s <- as.data.frame(c(summary(area66)$coefficients[16,2]))
-area_p66s <- as.data.frame(c(summary(area66)$coefficients[16,5]))
+area_b66i <- as.data.frame(c(summary(area66)$coefficients[10,1]))
+area_se66i <- as.data.frame(c(summary(area66)$coefficients[10,2]))
+area_p66i <- as.data.frame(c(summary(area66)$coefficients[10,5]))
 
-area67 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+area67 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                  site_trvtmrh_area_cent + scale(subj_trvtmrh_area) + site_trvtmrh_area_cent*wave + scale(subj_trvtmrh_area)*wave +
                  (1 + wave|site_id/id), 
                data = pfactor_red, 
                control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-area_b67i <- as.data.frame(c(summary(area67)$coefficients[14,1]))
-area_se67i <- as.data.frame(c(summary(area67)$coefficients[14,2]))
-area_p67i <- as.data.frame(c(summary(area67)$coefficients[14,5]))
-area_b67s <- as.data.frame(c(summary(area67)$coefficients[16,1]))
-area_se67s <- as.data.frame(c(summary(area67)$coefficients[16,2]))
-area_p67s <- as.data.frame(c(summary(area67)$coefficients[16,5]))
+area_b67i <- as.data.frame(c(summary(area67)$coefficients[10,1]))
+area_se67i <- as.data.frame(c(summary(area67)$coefficients[10,2]))
+area_p67i <- as.data.frame(c(summary(area67)$coefficients[10,5]))
 
-area68 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+area68 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                  site_insularh_area_cent + scale(subj_insularh_area) + site_insularh_area_cent*wave + scale(subj_insularh_area)*wave +
                  (1 + wave|site_id/id), 
                data = pfactor_red, 
                control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-area_b68i <- as.data.frame(c(summary(area68)$coefficients[14,1]))
-area_se68i <- as.data.frame(c(summary(area68)$coefficients[14,2]))
-area_p68i <- as.data.frame(c(summary(area68)$coefficients[14,5]))
-area_b68s <- as.data.frame(c(summary(area68)$coefficients[16,1]))
-area_se68s <- as.data.frame(c(summary(area68)$coefficients[16,2]))
-area_p68s <- as.data.frame(c(summary(area68)$coefficients[16,5]))
+area_b68i <- as.data.frame(c(summary(area68)$coefficients[10,1]))
+area_se68i <- as.data.frame(c(summary(area68)$coefficients[10,2]))
+area_p68i <- as.data.frame(c(summary(area68)$coefficients[10,5]))
 
 #create data frame with all parcel-wise cortical areaume st. estimates, SEs, and p-values
 area_parcel <- data.frame(x=c("area"))
@@ -3162,13 +2896,6 @@ newareabi <- c(area_b1i,area_b2i,area_b3i,area_b4i,area_b5i,area_b6i,area_b7i,ar
                area_b58i,area_b59i,area_b60i,area_b61i,area_b62i,area_b63i,area_b64i,area_b65i,area_b66i,area_b67i,area_b68i)
 area_parcel <- cbind(area_parcel,newareabi)
 
-newareabs <- c(area_b1s,area_b2s,area_b3s,area_b4s,area_b5s,area_b6s,area_b7s,area_b8s,area_b9s,area_b10s,area_b11s,area_b12s,area_b13s,area_b14s,area_b15s,
-               area_b16s,area_b17s,area_b18s,area_b19s,area_b20s,area_b21s,area_b22s,area_b23s,area_b24s,area_b25s,area_b26s,area_b27s,area_b28s,area_b29s,
-               area_b30s,area_b31s,area_b32s,area_b33s,area_b34s,area_b35s,area_b36s,area_b37s,area_b38s,area_b39s,area_b40s,area_b41s,area_b42s,area_b43s,
-               area_b44s,area_b45s,area_b46s,area_b47s,area_b48s,area_b49s,area_b50s,area_b51s,area_b52s,area_b53s,area_b54s,area_b55s,area_b56s,area_b57s,
-               area_b58s,area_b59s,area_b60s,area_b61s,area_b62s,area_b63s,area_b64s,area_b65s,area_b66s,area_b67s,area_b68s)
-area_parcel <- cbind(area_parcel,newareabs)
-
 newareasei <- c(area_se1i,area_se2i,area_se3i,area_se4i,area_se5i,area_se6i,area_se7i,area_se8i,area_se9i,area_se10i,area_se11i,area_se12i,area_se13i,
                 area_se14i,area_se15i,area_se16i,area_se17i,area_se18i,area_se19i,area_se20i,area_se21i,area_se22i,area_se23i,area_se24i,area_se25i,
                 area_se26i,area_se27i,area_se28i,area_se29i,area_se30i,area_se31i,area_se32i,area_se33i,area_se34i,area_se35i,area_se36i,area_se37i,
@@ -3177,27 +2904,12 @@ newareasei <- c(area_se1i,area_se2i,area_se3i,area_se4i,area_se5i,area_se6i,area
                 area_se62i,area_se63i,area_se64i,area_se65i,area_se66i,area_se67i,area_se68i)
 area_parcel <- cbind(area_parcel,newareasei)
 
-newareases <- c(area_se1s,area_se2s,area_se3s,area_se4s,area_se5s,area_se6s,area_se7s,area_se8s,area_se9s,area_se10s,area_se11s,area_se12s,area_se13s,
-                area_se14s,area_se15s,area_se16s,area_se17s,area_se18s,area_se19s,area_se20s,area_se21s,area_se22s,area_se23s,area_se24s,area_se25s,
-                area_se26s,area_se27s,area_se28s,area_se29s,area_se30s,area_se31s,area_se32s,area_se33s,area_se34s,area_se35s,area_se36s,area_se37s,
-                area_se38s,area_se39s,area_se40s,area_se41s,area_se42s,area_se43s,area_se44s,area_se45s,area_se46s,area_se47s,area_se48s,area_se49s,
-                area_se50s,area_se51s,area_se52s,area_se53s,area_se54s,area_se55s,area_se56s,area_se57s,area_se58s,area_se59s,area_se60s,area_se61s,
-                area_se62s,area_se63s,area_se64s,area_se65s,area_se66s,area_se67s,area_se68s)
-area_parcel <- cbind(area_parcel,newareases)
-
 newareapi <- c(area_p1i,area_p2i,area_p3i,area_p4i,area_p5i,area_p6i,area_p7i,area_p8i,area_p9i,area_p10i,area_p11i,area_p12i,area_p13i,area_p14i,area_p15i,
                area_p16i,area_p17i,area_p18i,area_p19i,area_p20i,area_p21i,area_p22i,area_p23i,area_p24i,area_p25i,area_p26i,area_p27i,area_p28i,area_p29i,
                area_p30i,area_p31i,area_p32i,area_p33i,area_p34i,area_p35i,area_p36i,area_p37i,area_p38i,area_p39i,area_p40i,area_p41i,area_p42i,area_p43i,
                area_p44i,area_p45i,area_p46i,area_p47i,area_p48i,area_p49i,area_p50i,area_p51i,area_p52i,area_p53i,area_p54i,area_p55i,area_p56i,area_p57i,
                area_p58i,area_p59i,area_p60i,area_p61i,area_p62i,area_p63i,area_p64i,area_p65i,area_p66i,area_p67i,area_p68i)
 area_parcel <- cbind(area_parcel,newareapi)
-
-newareaps <- c(area_p1s,area_p2s,area_p3s,area_p4s,area_p5s,area_p6s,area_p7s,area_p8s,area_p9s,area_p10s,area_p11s,area_p12s,area_p13s,area_p14s,area_p15s,
-               area_p16s,area_p17s,area_p18s,area_p19s,area_p20s,area_p21s,area_p22s,area_p23s,area_p24s,area_p25s,area_p26s,area_p27s,area_p28s,area_p29s,
-               area_p30s,area_p31s,area_p32s,area_p33s,area_p34s,area_p35s,area_p36s,area_p37s,area_p38s,area_p39s,area_p40s,area_p41s,area_p42s,area_p43s,
-               area_p44s,area_p45s,area_p46s,area_p47s,area_p48s,area_p49s,area_p50s,area_p51s,area_p52s,area_p53s,area_p54s,area_p55s,area_p56s,area_p57s,
-               area_p58s,area_p59s,area_p60s,area_p61s,area_p62s,area_p63s,area_p64s,area_p65s,area_p66s,area_p67s,area_p68s)
-area_parcel <- cbind(area_parcel,newareaps)
 
 names(area_parcel) <- c('area','banksstslh_area_bi','cdacatelh_area_bi','cdmdfrlh_area_bi','cuneuslh_area_bi','ehinallh_area_bi','fusiformlh_area_bi',
                         'ifpllh_area_bi','iftmlh_area_bi','ihcatelh_area_bi','locclh_area_bi','lobfrlh_area_bi','linguallh_area_bi',
@@ -3211,18 +2923,6 @@ names(area_parcel) <- c('area','banksstslh_area_bi','cdacatelh_area_bi','cdmdfrl
                         'postcnrh_area_bi','ptcaterh_area_bi','precnrh_area_bi','pcrh_area_bi','rracaterh_area_bi','rrmdfrrh_area_bi',
                         'sufrrh_area_bi','suplrh_area_bi','sutmrh_area_bi','smrh_area_bi','frpolerh_area_bi',
                         'tmpolerh_area_bi','trvtmrh_area_bi','insularh_area_bi',
-                        'banksstslh_area_bs','cdacatelh_area_bs','cdmdfrlh_area_bs','cuneuslh_area_bs','ehinallh_area_bs','fusiformlh_area_bs',
-                        'ifpllh_area_bs','iftmlh_area_bs','ihcatelh_area_bs','locclh_area_bs','lobfrlh_area_bs','linguallh_area_bs',
-                        'mobfrlh_area_bs','mdtmlh_area_bs','parahpallh_area_bs','paracnlh_area_bs','parsopclh_area_bs','parsobislh_area_bs',
-                        'parstgrislh_area_bs','pericclh_area_bs','postcnlh_area_bs','ptcatelh_area_bs','precnlh_area_bs','pclh_area_bs',
-                        'rracatelh_area_bs','rrmdfrlh_area_bs','sufrlh_area_bs','supllh_area_bs','sutmlh_area_bs','smlh_area_bs','frpolelh_area_bs',
-                        'tmpolelh_area_bs','trvtmlh_area_bs','insulalh_area_bs','banksstsrh_area_bs','cdacaterh_area_bs','cdmdfrrh_area_bs',
-                        'cuneusrh_area_bs','ehinalrh_area_bs','fusiformrh_area_bs','ifplrh_area_bs','iftmrh_area_bs','ihcaterh_area_bs',
-                        'loccrh_area_bs','lobfrrh_area_bs','lingualrh_area_bs','mobfrrh_area_bs','mdtmrh_area_bs','parahpalrh_area_bs',
-                        'paracnrh_area_bs','parsopcrh_area_bs','parsobisrh_area_bs','parstgrisrh_area_bs','periccrh_area_bs',
-                        'postcnrh_area_bs','ptcaterh_area_bs','precnrh_area_bs','pcrh_area_bs','rracaterh_area_bs','rrmdfrrh_area_bs',
-                        'sufrrh_area_bs','suplrh_area_bs','sutmrh_area_bs','smrh_area_bs','frpolerh_area_bs',
-                        'tmpolerh_area_bs','trvtmrh_area_bs','insularh_area_bs',
                         'banksstslh_area_sei','cdacatelh_area_sei','cdmdfrlh_area_sei','cuneuslh_area_sei','ehinallh_area_sei','fusiformlh_area_sei',
                         'ifpllh_area_sei','iftmlh_area_sei','ihcatelh_area_sei','locclh_area_sei','lobfrlh_area_sei','linguallh_area_sei',
                         'mobfrlh_area_sei','mdtmlh_area_sei','parahpallh_area_sei','paracnlh_area_sei','parsopclh_area_sei',
@@ -3236,19 +2936,6 @@ names(area_parcel) <- c('area','banksstslh_area_bi','cdacatelh_area_bi','cdmdfrl
                         'ptcaterh_area_sei','precnrh_area_sei','pcrh_area_sei','rracaterh_area_sei','rrmdfrrh_area_sei',
                         'sufrrh_area_sei','suplrh_area_sei','sutmrh_area_sei','smrh_area_sei','frpolerh_area_sei',
                         'tmpolerh_area_sei','trvtmrh_area_sei','insularh_area_sei',
-                        'banksstslh_area_ses','cdacatelh_area_ses','cdmdfrlh_area_ses','cuneuslh_area_ses','ehinallh_area_ses','fusiformlh_area_ses',
-                        'ifpllh_area_ses','iftmlh_area_ses','ihcatelh_area_ses','locclh_area_ses','lobfrlh_area_ses','linguallh_area_ses',
-                        'mobfrlh_area_ses','mdtmlh_area_ses','parahpallh_area_ses','paracnlh_area_ses','parsopclh_area_ses',
-                        'parsobislh_area_ses','parstgrislh_area_ses','pericclh_area_ses','postcnlh_area_ses','ptcatelh_area_ses',
-                        'precnlh_area_ses','pclh_area_ses','rracatelh_area_ses','rrmdfrlh_area_ses','sufrlh_area_ses','supllh_area_ses',
-                        'sutmlh_area_ses','smlh_area_ses','frpolelh_area_ses','tmpolelh_area_ses','trvtmlh_area_ses','insulalh_area_ses',
-                        'banksstsrh_area_ses','cdacaterh_area_ses','cdmdfrrh_area_ses','cuneusrh_area_ses','ehinalrh_area_ses',
-                        'fusiformrh_area_ses','ifplrh_area_ses','iftmrh_area_ses','ihcaterh_area_ses','loccrh_area_ses','lobfrrh_area_ses',
-                        'lingualrh_area_ses','mobfrrh_area_ses','mdtmrh_area_ses','parahpalrh_area_ses','paracnrh_area_ses',
-                        'parsopcrh_area_ses','parsobisrh_area_ses','parstgrisrh_area_ses','periccrh_area_ses','postcnrh_area_ses',
-                        'ptcaterh_area_ses','precnrh_area_ses','pcrh_area_ses','rracaterh_area_ses','rrmdfrrh_area_ses',
-                        'sufrrh_area_ses','suplrh_area_ses','sutmrh_area_ses','smrh_area_ses','frpolerh_area_ses',
-                        'tmpolerh_area_ses','trvtmrh_area_ses','insularh_area_ses',
                         'banksstslh_area_pi','cdacatelh_area_pi','cdmdfrlh_area_pi','cuneuslh_area_pi','ehinallh_area_pi','fusiformlh_area_pi','ifpllh_area_pi','iftmlh_area_pi',
                         'ihcatelh_area_pi','locclh_area_pi','lobfrlh_area_pi','linguallh_area_pi','mobfrlh_area_pi','mdtmlh_area_pi',
                         'parahpallh_area_pi','paracnlh_area_pi','parsopclh_area_pi','parsobislh_area_pi','parstgrislh_area_pi',
@@ -3260,19 +2947,7 @@ names(area_parcel) <- c('area','banksstslh_area_bi','cdacatelh_area_bi','cdmdfrl
                         'paracnrh_area_pi','parsopcrh_area_pi','parsobisrh_area_pi','parstgrisrh_area_pi','periccrh_area_pi',
                         'postcnrh_area_pi','ptcaterh_area_pi','precnrh_area_pi','pcrh_area_pi','rracaterh_area_pi','rrmdfrrh_area_pi',
                         'sufrrh_area_pi','suplrh_area_pi','sutmrh_area_pi','smrh_area_pi','frpolerh_area_pi',
-                        'tmpolerh_area_pi','trvtmrh_area_pi','insularh_area_pi',
-                        'banksstslh_area_ps','cdacatelh_area_ps','cdmdfrlh_area_ps','cuneuslh_area_ps','ehinallh_area_ps','fusiformlh_area_ps','ifpllh_area_ps','iftmlh_area_ps',
-                        'ihcatelh_area_ps','locclh_area_ps','lobfrlh_area_ps','linguallh_area_ps','mobfrlh_area_ps','mdtmlh_area_ps',
-                        'parahpallh_area_ps','paracnlh_area_ps','parsopclh_area_ps','parsobislh_area_ps','parstgrislh_area_ps',
-                        'pericclh_area_ps','postcnlh_area_ps','ptcatelh_area_ps','precnlh_area_ps','pclh_area_ps','rracatelh_area_ps',
-                        'rrmdfrlh_area_ps','sufrlh_area_ps','supllh_area_ps','sutmlh_area_ps','smlh_area_ps','frpolelh_area_ps',
-                        'tmpolelh_area_ps','trvtmlh_area_ps','insulalh_area_ps','banksstsrh_area_ps','cdacaterh_area_ps','cdmdfrrh_area_ps',
-                        'cuneusrh_area_ps','ehinalrh_area_ps','fusiformrh_area_ps','ifplrh_area_ps','iftmrh_area_ps','ihcaterh_area_ps',
-                        'loccrh_area_ps','lobfrrh_area_ps','lingualrh_area_ps','mobfrrh_area_ps','mdtmrh_area_ps','parahpalrh_area_ps',
-                        'paracnrh_area_ps','parsopcrh_area_ps','parsobisrh_area_ps','parstgrisrh_area_ps','periccrh_area_ps',
-                        'postcnrh_area_ps','ptcaterh_area_ps','precnrh_area_ps','pcrh_area_ps','rracaterh_area_ps','rrmdfrrh_area_ps',
-                        'sufrrh_area_ps','suplrh_area_ps','sutmrh_area_ps','smrh_area_ps','frpolerh_area_ps',
-                        'tmpolerh_area_ps','trvtmrh_area_ps','insularh_area_ps')
+                        'tmpolerh_area_pi','trvtmrh_area_pi','insularh_area_pi')
 
 #calculate 95% CIs and create lower and upper bound variables 
 area_parcel$ci_lower_banksstslh_areai <- area_parcel$banksstslh_area_bi - 1.96*area_parcel$banksstslh_area_sei 
@@ -3413,836 +3088,887 @@ area_parcel$ci_upper_trvtmrh_areai <- area_parcel$trvtmrh_area_bi + 1.96*area_pa
 area_parcel$ci_lower_insularh_areai <- area_parcel$insularh_area_bi - 1.96*area_parcel$insularh_area_sei 
 area_parcel$ci_upper_insularh_areai <- area_parcel$insularh_area_bi + 1.96*area_parcel$insularh_area_sei
 
-write.csv(area_parcel, "Parcel-Wise Cortical Area MLM Analysis Output Standardized_FINAL.csv") #write csv file
+write.csv(area_parcel, "Parcel-Wise Cortical Area MLM Analysis Output Standardized_FINAL_SuppTable7.csv") #write csv file
 
-#Parcel-wise cortical thickness analyses
+#FDR correction
+pval_area_parcel_fdr <- transform(newareapi, adj.p = p.adjust(as.matrix(newareapi),method = "BH"))
+sum(pval_area_parcel_fdr$adj.p<0.05)
+write.csv(pval_area_parcel_fdr, "FDR adjusted pvalues_surface area parcel analysis.csv")
 
-thick1 <- lmer(scaleint ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+#Parcel-wise subcortical volume analyses (19 subcortical volume parcels)
+#conditional three-level growth model with subcortical volume parcels predicting the intercept of p factor scores 
+#covariates: sex, age, scanner model dummies
+#standardized betas, standard errors, and p-values for intercepts were saved in a csv file
+#follow-up analysis was conducted with subcort_vol (total subcortical volume) included as an additional covariate 
+
+sub1 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
+               site_crbcortexlh_vol_cent + scale(subj_crbcortexlh_vol) + site_crbcortexlh_vol_cent*wave + scale(subj_crbcortexlh_vol)*wave +
+               (1 + wave|site_id/id), 
+             data = pfactor_red, 
+             control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
+sub_b1i <- as.data.frame(c(summary(sub1)$coefficients[10,1]))
+sub_se1i <- as.data.frame(c(summary(sub1)$coefficients[10,2]))
+sub_p1i <- as.data.frame(c(summary(sub1)$coefficients[10,5]))
+
+sub2 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
+               site_tplh_vol_cent + scale(subj_tplh_vol) + site_tplh_vol_cent*wave + scale(subj_tplh_vol)*wave +
+               (1 + wave|site_id/id), 
+             data = pfactor_red, 
+             control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
+sub_b2i <- as.data.frame(c(summary(sub2)$coefficients[10,1]))
+sub_se2i <- as.data.frame(c(summary(sub2)$coefficients[10,2]))
+sub_p2i <- as.data.frame(c(summary(sub2)$coefficients[10,5]))
+
+sub3 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
+               site_caudatelh_vol_cent + scale(subj_caudatelh_vol) + site_caudatelh_vol_cent*wave + scale(subj_caudatelh_vol)*wave +
+               (1 + wave|site_id/id), 
+             data = pfactor_red, 
+             control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
+sub_b3i <- as.data.frame(c(summary(sub3)$coefficients[10,1]))
+sub_se3i <- as.data.frame(c(summary(sub3)$coefficients[10,2]))
+sub_p3i <- as.data.frame(c(summary(sub3)$coefficients[10,5]))
+
+sub4 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
+               site_putamenlh_vol_cent + scale(subj_putamenlh_vol) + site_putamenlh_vol_cent*wave + scale(subj_putamenlh_vol)*wave +
+               (1 + wave|site_id/id), 
+             data = pfactor_red, 
+             control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
+sub_b4i <- as.data.frame(c(summary(sub4)$coefficients[10,1]))
+sub_se4i <- as.data.frame(c(summary(sub4)$coefficients[10,2]))
+sub_p4i <- as.data.frame(c(summary(sub4)$coefficients[10,5]))
+
+sub5 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
+               site_pallidumlh_vol_cent + scale(subj_pallidumlh_vol) + site_pallidumlh_vol_cent*wave + scale(subj_pallidumlh_vol)*wave +
+               (1 + wave|site_id/id), 
+             data = pfactor_red, 
+             control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
+sub_b5i <- as.data.frame(c(summary(sub5)$coefficients[10,1]))
+sub_se5i <- as.data.frame(c(summary(sub5)$coefficients[10,2]))
+sub_p5i <- as.data.frame(c(summary(sub5)$coefficients[10,5]))
+
+sub6 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
+               site_bstem_vol_cent + scale(subj_bstem_vol) + site_bstem_vol_cent*wave + scale(subj_bstem_vol)*wave +
+               (1 + wave|site_id/id), 
+             data = pfactor_red, 
+             control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
+sub_b6i <- as.data.frame(c(summary(sub6)$coefficients[10,1]))
+sub_se6i <- as.data.frame(c(summary(sub6)$coefficients[10,2]))
+sub_p6i <- as.data.frame(c(summary(sub6)$coefficients[10,5]))
+
+sub7 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
+               site_hpuslh_vol_cent + scale(subj_hpuslh_vol) + site_hpuslh_vol_cent*wave + scale(subj_hpuslh_vol)*wave +
+               (1 + wave|site_id/id), 
+             data = pfactor_red, 
+             control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
+sub_b7i <- as.data.frame(c(summary(sub7)$coefficients[10,1]))
+sub_se7i <- as.data.frame(c(summary(sub7)$coefficients[10,2]))
+sub_p7i <- as.data.frame(c(summary(sub7)$coefficients[10,5]))
+
+sub8 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
+               site_amygdalalh_vol_cent + scale(subj_amygdalalh_vol) + site_amygdalalh_vol_cent*wave + scale(subj_amygdalalh_vol)*wave +
+               (1 + wave|site_id/id), 
+             data = pfactor_red, 
+             control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
+sub_b8i <- as.data.frame(c(summary(sub8)$coefficients[10,1]))
+sub_se8i <- as.data.frame(c(summary(sub8)$coefficients[10,2]))
+sub_p8i <- as.data.frame(c(summary(sub8)$coefficients[10,5]))
+
+sub9 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
+               site_aal_vol_cent + scale(subj_aal_vol) + site_aal_vol_cent*wave + scale(subj_aal_vol)*wave +
+               (1 + wave|site_id/id), 
+             data = pfactor_red, 
+             control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
+sub_b9i <- as.data.frame(c(summary(sub9)$coefficients[10,1]))
+sub_se9i <- as.data.frame(c(summary(sub9)$coefficients[10,2]))
+sub_p9i <- as.data.frame(c(summary(sub9)$coefficients[10,5]))
+
+sub10 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
+                site_vedclh_vol_cent + scale(subj_vedclh_vol) + site_vedclh_vol_cent*wave + scale(subj_vedclh_vol)*wave +
+                (1 + wave|site_id/id), 
+              data = pfactor_red, 
+              control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
+sub_b10i <- as.data.frame(c(summary(sub10)$coefficients[10,1]))
+sub_se10i <- as.data.frame(c(summary(sub10)$coefficients[10,2]))
+sub_p10i <- as.data.frame(c(summary(sub10)$coefficients[10,5]))
+
+sub11 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
+                site_crbcortexrh_vol_cent + scale(subj_crbcortexrh_vol) + site_crbcortexrh_vol_cent*wave + scale(subj_crbcortexrh_vol)*wave +
+                (1 + wave|site_id/id), 
+              data = pfactor_red, 
+              control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
+sub_b11i <- as.data.frame(c(summary(sub11)$coefficients[10,1]))
+sub_se11i <- as.data.frame(c(summary(sub11)$coefficients[10,2]))
+sub_p11i <- as.data.frame(c(summary(sub11)$coefficients[10,5]))
+
+sub12 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
+                site_tprh_vol_cent + scale(subj_tprh_vol) + site_tprh_vol_cent*wave + scale(subj_tprh_vol)*wave +
+                (1 + wave|site_id/id), 
+              data = pfactor_red, 
+              control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
+sub_b12i <- as.data.frame(c(summary(sub12)$coefficients[10,1]))
+sub_se12i <- as.data.frame(c(summary(sub12)$coefficients[10,2]))
+sub_p12i <- as.data.frame(c(summary(sub12)$coefficients[10,5]))
+
+sub13 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
+                site_caudaterh_vol_cent + scale(subj_caudaterh_vol) + site_caudaterh_vol_cent*wave + scale(subj_caudaterh_vol)*wave +
+                (1 + wave|site_id/id), 
+              data = pfactor_red, 
+              control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
+sub_b13i <- as.data.frame(c(summary(sub13)$coefficients[10,1]))
+sub_se13i <- as.data.frame(c(summary(sub13)$coefficients[10,2]))
+sub_p13i <- as.data.frame(c(summary(sub13)$coefficients[10,5]))
+
+sub14 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
+                site_putamenrh_vol_cent + scale(subj_putamenrh_vol) + site_putamenrh_vol_cent*wave + scale(subj_putamenrh_vol)*wave +
+                (1 + wave|site_id/id), 
+              data = pfactor_red, 
+              control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
+sub_b14i <- as.data.frame(c(summary(sub14)$coefficients[10,1]))
+sub_se14i <- as.data.frame(c(summary(sub14)$coefficients[10,2]))
+sub_p14i <- as.data.frame(c(summary(sub14)$coefficients[10,5]))
+
+sub15 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
+                site_pallidumrh_vol_cent + scale(subj_pallidumrh_vol) + site_pallidumrh_vol_cent*wave + scale(subj_pallidumrh_vol)*wave +
+                (1 + wave|site_id/id), 
+              data = pfactor_red, 
+              control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
+sub_b15i <- as.data.frame(c(summary(sub15)$coefficients[10,1]))
+sub_se15i <- as.data.frame(c(summary(sub15)$coefficients[10,2]))
+sub_p15i <- as.data.frame(c(summary(sub15)$coefficients[10,5]))
+
+sub16 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
+                site_hpusrh_vol_cent + scale(subj_hpusrh_vol) + site_hpusrh_vol_cent*wave + scale(subj_hpusrh_vol)*wave +
+                (1 + wave|site_id/id), 
+              data = pfactor_red, 
+              control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
+sub_b16i <- as.data.frame(c(summary(sub16)$coefficients[10,1]))
+sub_se16i <- as.data.frame(c(summary(sub16)$coefficients[10,2]))
+sub_p16i <- as.data.frame(c(summary(sub16)$coefficients[10,5]))
+
+sub17 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
+                site_amygdalarh_vol_cent + scale(subj_amygdalarh_vol) + site_amygdalarh_vol_cent*wave + scale(subj_amygdalarh_vol)*wave +
+                (1 + wave|site_id/id), 
+              data = pfactor_red, 
+              control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
+sub_b17i <- as.data.frame(c(summary(sub17)$coefficients[10,1]))
+sub_se17i <- as.data.frame(c(summary(sub17)$coefficients[10,2]))
+sub_p17i <- as.data.frame(c(summary(sub17)$coefficients[10,5]))
+
+sub18 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
+                site_aar_vol_cent + scale(subj_aar_vol) + site_aar_vol_cent*wave + scale(subj_aar_vol)*wave +
+                (1 + wave|site_id/id), 
+              data = pfactor_red, 
+              control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
+sub_b18i <- as.data.frame(c(summary(sub18)$coefficients[10,1]))
+sub_se18i <- as.data.frame(c(summary(sub18)$coefficients[10,2]))
+sub_p18i <- as.data.frame(c(summary(sub18)$coefficients[10,5]))
+
+sub19 <- lmer(scalep ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
+                site_vedcrh_vol_cent + scale(subj_vedcrh_vol) + site_vedcrh_vol_cent*wave + scale(subj_vedcrh_vol)*wave +
+                (1 + wave|site_id/id), 
+              data = pfactor_red, 
+              control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
+sub_b19i <- as.data.frame(c(summary(sub19)$coefficients[10,1]))
+sub_se19i <- as.data.frame(c(summary(sub19)$coefficients[10,2]))
+sub_p19i <- as.data.frame(c(summary(sub19)$coefficients[10,5]))
+
+#create data frame with all parcel-wise cortical volume st. estimates, SEs, and p-values
+sub_parcel <- data.frame(x=c("sub"))
+
+newsubbi <- c(sub_b1i,sub_b2i,sub_b3i,sub_b4i,sub_b5i,sub_b6i,sub_b7i,sub_b8i,sub_b9i,sub_b10i,sub_b11i,sub_b12i,sub_b13i,sub_b14i,sub_b15i,
+              sub_b16i,sub_b17i,sub_b18i,sub_b19i)
+sub_parcel <- cbind(sub_parcel,newsubbi)
+
+newsubsei <- c(sub_se1i,sub_se2i,sub_se3i,sub_se4i,sub_se5i,sub_se6i,sub_se7i,sub_se8i,sub_se9i,sub_se10i,sub_se11i,sub_se12i,sub_se13i,
+               sub_se14i,sub_se15i,sub_se16i,sub_se17i,sub_se18i,sub_se19i)
+sub_parcel <- cbind(sub_parcel,newsubsei)
+
+newsubpi <- c(sub_p1i,sub_p2i,sub_p3i,sub_p4i,sub_p5i,sub_p6i,sub_p7i,sub_p8i,sub_p9i,sub_p10i,sub_p11i,sub_p12i,sub_p13i,sub_p14i,sub_p15i,
+              sub_p16i,sub_p17i,sub_p18i,sub_p19i)
+sub_parcel <- cbind(sub_parcel,newsubpi)
+
+names(sub_parcel) <- c('sub','crbcortexlh_vol_bi','tplh_vol_bi','caudatelh_vol_bi','putamenlh_vol_bi','pallidumlh_vol_bi',
+                       'bstem_vol_bi','hpuslh_vol_bi','amygdalalh_vol_bi','aal_vol_bi','vedclh_vol_bi','crbcortexrh_vol_bi',
+                       'tprh_vol_bi','caudaterh_vol_bi','putamenrh_vol_bi','pallidumrh_vol_bi','hpusrh_vol_bi',
+                       'amygdalarh_vol_bi','aar_vol_bi','vedcrh_vol_bi',
+                       'crbcortexlh_vol_sei','tplh_vol_sei','caudatelh_vol_sei','putamenlh_vol_sei','pallidumlh_vol_sei',
+                       'bstem_vol_sei','hpuslh_vol_sei','amygdalalh_vol_sei','aal_vol_sei','vedclh_vol_sei','crbcortexrh_vol_sei',
+                       'tprh_vol_sei','caudaterh_vol_sei','putamenrh_vol_sei','pallidumrh_vol_sei','hpusrh_vol_sei',
+                       'amygdalarh_vol_sei','aar_vol_sei','vedcrh_vol_sei',
+                       'crbcortexlh_vol_pi','tplh_vol_pi','caudatelh_vol_pi','putamenlh_vol_pi','pallidumlh_vol_pi',
+                       'bstem_vol_pi','hpuslh_vol_pi','amygdalalh_vol_pi','aal_vol_pi','vedclh_vol_pi','crbcortexrh_vol_pi',
+                       'tprh_vol_pi','caudaterh_vol_pi','putamenrh_vol_pi','pallidumrh_vol_pi','hpusrh_vol_pi',
+                       'amygdalarh_vol_pi','aar_vol_pi','vedcrh_vol_pi')
+
+#calculate 95% CIs and create lower and upper bound variables 
+sub_parcel$ci_lower_crbcortexlh_voli <- sub_parcel$crbcortexlh_vol_bi - 1.96*sub_parcel$crbcortexlh_vol_sei
+sub_parcel$ci_upper_crbcortexlh_voli <- sub_parcel$crbcortexlh_vol_bi + 1.96*sub_parcel$crbcortexlh_vol_sei
+sub_parcel$ci_lower_tplh_voli <- sub_parcel$tplh_vol_bi - 1.96*sub_parcel$tplh_vol_sei
+sub_parcel$ci_upper_tplh_voli <- sub_parcel$tplh_vol_bi + 1.96*sub_parcel$tplh_vol_sei
+sub_parcel$ci_lower_caudatelh_voli <- sub_parcel$caudatelh_vol_bi - 1.96*sub_parcel$caudatelh_vol_sei 
+sub_parcel$ci_upper_caudatelh_voli <- sub_parcel$caudatelh_vol_bi + 1.96*sub_parcel$caudatelh_vol_sei
+sub_parcel$ci_lower_putamenlh_voli <- sub_parcel$putamenlh_vol_bi - 1.96*sub_parcel$putamenlh_vol_sei 
+sub_parcel$ci_upper_putamenlh_voli <- sub_parcel$putamenlh_vol_bi + 1.96*sub_parcel$putamenlh_vol_sei
+sub_parcel$ci_lower_pallidumlh_voli <- sub_parcel$pallidumlh_vol_bi - 1.96*sub_parcel$pallidumlh_vol_sei 
+sub_parcel$ci_upper_pallidumlh_voli <- sub_parcel$pallidumlh_vol_bi + 1.96*sub_parcel$pallidumlh_vol_sei
+sub_parcel$ci_lower_bstem_voli <- sub_parcel$bstem_vol_bi - 1.96*sub_parcel$bstem_vol_sei 
+sub_parcel$ci_upper_bstem_voli <- sub_parcel$bstem_vol_bi + 1.96*sub_parcel$bstem_vol_sei
+sub_parcel$ci_lower_hpuslh_voli <- sub_parcel$hpuslh_vol_bi - 1.96*sub_parcel$hpuslh_vol_sei 
+sub_parcel$ci_upper_hpuslh_voli <- sub_parcel$hpuslh_vol_bi + 1.96*sub_parcel$hpuslh_vol_sei
+sub_parcel$ci_lower_amygdalalh_voli <- sub_parcel$amygdalalh_vol_bi - 1.96*sub_parcel$amygdalalh_vol_sei 
+sub_parcel$ci_upper_amygdalalh_voli <- sub_parcel$amygdalalh_vol_bi + 1.96*sub_parcel$amygdalalh_vol_sei
+sub_parcel$ci_lower_aal_voli <- sub_parcel$aal_vol_bi - 1.96*sub_parcel$aal_vol_sei 
+sub_parcel$ci_upper_aal_voli <- sub_parcel$aal_vol_bi + 1.96*sub_parcel$aal_vol_sei
+sub_parcel$ci_lower_vedclh_voli <- sub_parcel$vedclh_vol_bi - 1.96*sub_parcel$vedclh_vol_sei 
+sub_parcel$ci_upper_vedclh_voli <- sub_parcel$vedclh_vol_bi + 1.96*sub_parcel$vedclh_vol_sei
+
+sub_parcel$ci_lower_crbcortexrh_voli <- sub_parcel$crbcortexrh_vol_bi - 1.96*sub_parcel$crbcortexrh_vol_sei 
+sub_parcel$ci_upper_crbcortexrh_voli <- sub_parcel$crbcortexrh_vol_bi + 1.96*sub_parcel$crbcortexrh_vol_sei
+sub_parcel$ci_lower_tprh_voli <- sub_parcel$tprh_vol_bi - 1.96*sub_parcel$tprh_vol_sei 
+sub_parcel$ci_upper_tprh_voli <- sub_parcel$tprh_vol_bi + 1.96*sub_parcel$tprh_vol_sei
+sub_parcel$ci_lower_caudaterh_voli <- sub_parcel$caudaterh_vol_bi - 1.96*sub_parcel$caudaterh_vol_sei
+sub_parcel$ci_upper_caudaterh_voli <- sub_parcel$caudaterh_vol_bi + 1.96*sub_parcel$caudaterh_vol_sei
+sub_parcel$ci_lower_putamenrh_voli <- sub_parcel$putamenrh_vol_bi - 1.96*sub_parcel$putamenrh_vol_sei 
+sub_parcel$ci_upper_putamenrh_voli <- sub_parcel$putamenrh_vol_bi + 1.96*sub_parcel$putamenrh_vol_sei
+sub_parcel$ci_lower_pallidumrh_voli <- sub_parcel$pallidumrh_vol_bi - 1.96*sub_parcel$pallidumrh_vol_sei 
+sub_parcel$ci_upper_pallidumrh_voli <- sub_parcel$pallidumrh_vol_bi + 1.96*sub_parcel$pallidumrh_vol_sei
+sub_parcel$ci_lower_hpusrh_voli <- sub_parcel$hpusrh_vol_bi - 1.96*sub_parcel$hpusrh_vol_sei 
+sub_parcel$ci_upper_hpusrh_voli <- sub_parcel$hpusrh_vol_bi + 1.96*sub_parcel$hpusrh_vol_sei
+sub_parcel$ci_lower_amygdalarh_voli <- sub_parcel$amygdalarh_vol_bi - 1.96*sub_parcel$amygdalarh_vol_sei 
+sub_parcel$ci_upper_amygdalarh_voli <- sub_parcel$amygdalarh_vol_bi + 1.96*sub_parcel$amygdalarh_vol_sei
+sub_parcel$ci_lower_aar_voli <- sub_parcel$aar_vol_bi - 1.96*sub_parcel$aar_vol_sei 
+sub_parcel$ci_upper_aar_voli <- sub_parcel$aar_vol_bi + 1.96*sub_parcel$aar_vol_sei
+sub_parcel$ci_lower_vedcrh_voli <- sub_parcel$vedcrh_vol_bi - 1.96*sub_parcel$vedcrh_vol_sei 
+sub_parcel$ci_upper_vedcrh_voli <- sub_parcel$vedcrh_vol_bi + 1.96*sub_parcel$vedcrh_vol_sei
+
+write.csv(sub_parcel, "Parcel-Wise Subcortical Volume MLM Analysis Output Standardized_FINAL_SuppTable7.csv") #write csv file
+
+#FDR correction
+pval_sub_parcel_fdr <- transform(newsubpi, adj.p = p.adjust(as.matrix(newsubpi),method = "BH"))
+sum(pval_sub_parcel_fdr$adj.p<0.05)
+write.csv(pval_sub_parcel_fdr, "FDR adjusted pvalues_subcortical volume parcel analysis.csv")
+
+#Parcel-wise cortical thickness analyses (68 cortical thickness parcels)
+#conditional three-level growth model with cortical thickness parcels predicting the slope of internalizing factor scores 
+#covariates: sex, age, scanner model dummies
+#standardized betas, standard errors, and p-values for slopes were saved in a csv file
+#follow-up analysis was conducted with meanwb_ct (average cortical thickness) included as an additional covariate 
+
+thick1 <- lmer(scaleint ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                  site_banksstslh_thick_cent + scale(subj_banksstslh_thick) + site_banksstslh_thick_cent*wave + scale(subj_banksstslh_thick)*wave +
                  (1 + wave|site_id/id), 
                data = pfactor_red, 
                control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-thick_b1i <- as.data.frame(c(summary(thick1)$coefficients[14,1]))
-thick_se1i <- as.data.frame(c(summary(thick1)$coefficients[14,2]))
-thick_p1i <- as.data.frame(c(summary(thick1)$coefficients[14,5]))
-thick_b1s <- as.data.frame(c(summary(thick1)$coefficients[16,1]))
-thick_se1s <- as.data.frame(c(summary(thick1)$coefficients[16,2]))
-thick_p1s <- as.data.frame(c(summary(thick1)$coefficients[16,5]))
+thick_b1s <- as.data.frame(c(summary(thick1)$coefficients[12,1]))
+thick_se1s <- as.data.frame(c(summary(thick1)$coefficients[12,2]))
+thick_p1s <- as.data.frame(c(summary(thick1)$coefficients[12,5]))
 
-thick2 <- lmer(scaleint ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+thick2 <- lmer(scaleint ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                  site_cdacatelh_thick_cent + scale(subj_cdacatelh_thick) + site_cdacatelh_thick_cent*wave + scale(subj_cdacatelh_thick)*wave +
                  (1 + wave|site_id/id), 
                data = pfactor_red, 
                control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-thick_b2i <- as.data.frame(c(summary(thick2)$coefficients[14,1]))
-thick_se2i <- as.data.frame(c(summary(thick2)$coefficients[14,2]))
-thick_p2i <- as.data.frame(c(summary(thick2)$coefficients[14,5]))
-thick_b2s <- as.data.frame(c(summary(thick2)$coefficients[16,1]))
-thick_se2s <- as.data.frame(c(summary(thick2)$coefficients[16,2]))
-thick_p2s <- as.data.frame(c(summary(thick2)$coefficients[16,5]))
+thick_b2s <- as.data.frame(c(summary(thick2)$coefficients[12,1]))
+thick_se2s <- as.data.frame(c(summary(thick2)$coefficients[12,2]))
+thick_p2s <- as.data.frame(c(summary(thick2)$coefficients[12,5]))
 
-thick3 <- lmer(scaleint ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+thick3 <- lmer(scaleint ~ wave + sex + age + achieva + discovery + ingenia + prisma + 
                  site_cdmdfrlh_thick_cent + scale(subj_cdmdfrlh_thick) + site_cdmdfrlh_thick_cent*wave + scale(subj_cdmdfrlh_thick)*wave +
                  (1 + wave|site_id/id), 
                data = pfactor_red, 
                control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-thick_b3i <- as.data.frame(c(summary(thick3)$coefficients[14,1]))
-thick_se3i <- as.data.frame(c(summary(thick3)$coefficients[14,2]))
-thick_p3i <- as.data.frame(c(summary(thick3)$coefficients[14,5]))
-thick_b3s <- as.data.frame(c(summary(thick3)$coefficients[16,1]))
-thick_se3s <- as.data.frame(c(summary(thick3)$coefficients[16,2]))
-thick_p3s <- as.data.frame(c(summary(thick3)$coefficients[16,5]))
+thick_b3s <- as.data.frame(c(summary(thick3)$coefficients[12,1]))
+thick_se3s <- as.data.frame(c(summary(thick3)$coefficients[12,2]))
+thick_p3s <- as.data.frame(c(summary(thick3)$coefficients[12,5]))
 
-thick4 <- lmer(scaleint ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+thick4 <- lmer(scaleint ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                  site_cuneuslh_thick_cent + scale(subj_cuneuslh_thick) + site_cuneuslh_thick_cent*wave + scale(subj_cuneuslh_thick)*wave +
                  (1 + wave|site_id/id), 
                data = pfactor_red, 
                control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-thick_b4i <- as.data.frame(c(summary(thick4)$coefficients[14,1]))
-thick_se4i <- as.data.frame(c(summary(thick4)$coefficients[14,2]))
-thick_p4i <- as.data.frame(c(summary(thick4)$coefficients[14,5]))
-thick_b4s <- as.data.frame(c(summary(thick4)$coefficients[16,1]))
-thick_se4s <- as.data.frame(c(summary(thick4)$coefficients[16,2]))
-thick_p4s <- as.data.frame(c(summary(thick4)$coefficients[16,5]))
+thick_b4s <- as.data.frame(c(summary(thick4)$coefficients[12,1]))
+thick_se4s <- as.data.frame(c(summary(thick4)$coefficients[12,2]))
+thick_p4s <- as.data.frame(c(summary(thick4)$coefficients[12,5]))
 
-thick5 <- lmer(scaleint ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+thick5 <- lmer(scaleint ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                  site_ehinallh_thick_cent + scale(subj_ehinallh_thick) + site_ehinallh_thick_cent*wave + scale(subj_ehinallh_thick)*wave +
                  (1 + wave|site_id/id), 
                data = pfactor_red, 
                control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-thick_b5i <- as.data.frame(c(summary(thick5)$coefficients[14,1]))
-thick_se5i <- as.data.frame(c(summary(thick5)$coefficients[14,2]))
-thick_p5i <- as.data.frame(c(summary(thick5)$coefficients[14,5]))
-thick_b5s <- as.data.frame(c(summary(thick5)$coefficients[16,1]))
-thick_se5s <- as.data.frame(c(summary(thick5)$coefficients[16,2]))
-thick_p5s <- as.data.frame(c(summary(thick5)$coefficients[16,5]))
+thick_b5s <- as.data.frame(c(summary(thick5)$coefficients[12,1]))
+thick_se5s <- as.data.frame(c(summary(thick5)$coefficients[12,2]))
+thick_p5s <- as.data.frame(c(summary(thick5)$coefficients[12,5]))
 
-thick6 <- lmer(scaleint ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+thick6 <- lmer(scaleint ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                  site_fusiformlh_thick_cent + scale(subj_fusiformlh_thick) + site_fusiformlh_thick_cent*wave + scale(subj_fusiformlh_thick)*wave +
                  (1 + wave|site_id/id), 
                data = pfactor_red, 
                control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-thick_b6i <- as.data.frame(c(summary(thick6)$coefficients[14,1]))
-thick_se6i <- as.data.frame(c(summary(thick6)$coefficients[14,2]))
-thick_p6i <- as.data.frame(c(summary(thick6)$coefficients[14,5]))
-thick_b6s <- as.data.frame(c(summary(thick6)$coefficients[16,1]))
-thick_se6s <- as.data.frame(c(summary(thick6)$coefficients[16,2]))
-thick_p6s <- as.data.frame(c(summary(thick6)$coefficients[16,5]))
+thick_b6s <- as.data.frame(c(summary(thick6)$coefficients[12,1]))
+thick_se6s <- as.data.frame(c(summary(thick6)$coefficients[12,2]))
+thick_p6s <- as.data.frame(c(summary(thick6)$coefficients[12,5]))
 
-thick7 <- lmer(scaleint ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+thick7 <- lmer(scaleint ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                  site_ifpllh_thick_cent + scale(subj_ifpllh_thick) + site_ifpllh_thick_cent*wave + scale(subj_ifpllh_thick)*wave +
                  (1 + wave|site_id/id), 
                data = pfactor_red, 
                control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-thick_b7i <- as.data.frame(c(summary(thick7)$coefficients[14,1]))
-thick_se7i <- as.data.frame(c(summary(thick7)$coefficients[14,2]))
-thick_p7i <- as.data.frame(c(summary(thick7)$coefficients[14,5]))
-thick_b7s <- as.data.frame(c(summary(thick7)$coefficients[16,1]))
-thick_se7s <- as.data.frame(c(summary(thick7)$coefficients[16,2]))
-thick_p7s <- as.data.frame(c(summary(thick7)$coefficients[16,5]))
+thick_b7s <- as.data.frame(c(summary(thick7)$coefficients[12,1]))
+thick_se7s <- as.data.frame(c(summary(thick7)$coefficients[12,2]))
+thick_p7s <- as.data.frame(c(summary(thick7)$coefficients[12,5]))
 
-thick8 <- lmer(scaleint ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+thick8 <- lmer(scaleint ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                  site_iftmlh_thick_cent + scale(subj_iftmlh_thick) + site_iftmlh_thick_cent*wave + scale(subj_iftmlh_thick)*wave +
                  (1 + wave|site_id/id), 
                data = pfactor_red, 
                control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-thick_b8i <- as.data.frame(c(summary(thick8)$coefficients[14,1]))
-thick_se8i <- as.data.frame(c(summary(thick8)$coefficients[14,2]))
-thick_p8i <- as.data.frame(c(summary(thick8)$coefficients[14,5]))
-thick_b8s <- as.data.frame(c(summary(thick8)$coefficients[16,1]))
-thick_se8s <- as.data.frame(c(summary(thick8)$coefficients[16,2]))
-thick_p8s <- as.data.frame(c(summary(thick8)$coefficients[16,5]))
+thick_b8s <- as.data.frame(c(summary(thick8)$coefficients[12,1]))
+thick_se8s <- as.data.frame(c(summary(thick8)$coefficients[12,2]))
+thick_p8s <- as.data.frame(c(summary(thick8)$coefficients[12,5]))
 
-thick9 <- lmer(scaleint ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+thick9 <- lmer(scaleint ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                  site_ihcatelh_thick_cent + scale(subj_ihcatelh_thick) + site_ihcatelh_thick_cent*wave + scale(subj_ihcatelh_thick)*wave +
                  (1 + wave|site_id/id), 
                data = pfactor_red, 
                control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-thick_b9i <- as.data.frame(c(summary(thick9)$coefficients[14,1]))
-thick_se9i <- as.data.frame(c(summary(thick9)$coefficients[14,2]))
-thick_p9i <- as.data.frame(c(summary(thick9)$coefficients[14,5]))
-thick_b9s <- as.data.frame(c(summary(thick9)$coefficients[16,1]))
-thick_se9s <- as.data.frame(c(summary(thick9)$coefficients[16,2]))
-thick_p9s <- as.data.frame(c(summary(thick9)$coefficients[16,5]))
+thick_b9s <- as.data.frame(c(summary(thick9)$coefficients[12,1]))
+thick_se9s <- as.data.frame(c(summary(thick9)$coefficients[12,2]))
+thick_p9s <- as.data.frame(c(summary(thick9)$coefficients[12,5]))
 
-thick10 <- lmer(scaleint ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+thick10 <- lmer(scaleint ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                   site_locclh_thick_cent + scale(subj_locclh_thick) + site_locclh_thick_cent*wave + scale(subj_locclh_thick)*wave +
                   (1 + wave|site_id/id), 
                 data = pfactor_red, 
                 control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-thick_b10i <- as.data.frame(c(summary(thick10)$coefficients[14,1]))
-thick_se10i <- as.data.frame(c(summary(thick10)$coefficients[14,2]))
-thick_p10i <- as.data.frame(c(summary(thick10)$coefficients[14,5]))
-thick_b10s <- as.data.frame(c(summary(thick10)$coefficients[16,1]))
-thick_se10s <- as.data.frame(c(summary(thick10)$coefficients[16,2]))
-thick_p10s <- as.data.frame(c(summary(thick10)$coefficients[16,5]))
+thick_b10s <- as.data.frame(c(summary(thick10)$coefficients[12,1]))
+thick_se10s <- as.data.frame(c(summary(thick10)$coefficients[12,2]))
+thick_p10s <- as.data.frame(c(summary(thick10)$coefficients[12,5]))
 
-thick11 <- lmer(scaleint ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+thick11 <- lmer(scaleint ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                   site_lobfrlh_thick_cent + scale(subj_lobfrlh_thick) + site_lobfrlh_thick_cent*wave + scale(subj_lobfrlh_thick)*wave +
                   (1 + wave|site_id/id), 
                 data = pfactor_red, 
                 control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-thick_b11i <- as.data.frame(c(summary(thick11)$coefficients[14,1]))
-thick_se11i <- as.data.frame(c(summary(thick11)$coefficients[14,2]))
-thick_p11i <- as.data.frame(c(summary(thick11)$coefficients[14,5]))
-thick_b11s <- as.data.frame(c(summary(thick11)$coefficients[16,1]))
-thick_se11s <- as.data.frame(c(summary(thick11)$coefficients[16,2]))
-thick_p11s <- as.data.frame(c(summary(thick11)$coefficients[16,5]))
+thick_b11s <- as.data.frame(c(summary(thick11)$coefficients[12,1]))
+thick_se11s <- as.data.frame(c(summary(thick11)$coefficients[12,2]))
+thick_p11s <- as.data.frame(c(summary(thick11)$coefficients[12,5]))
 
-thick12 <- lmer(scaleint ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+thick12 <- lmer(scaleint ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                   site_linguallh_thick_cent + scale(subj_linguallh_thick) + site_linguallh_thick_cent*wave + scale(subj_linguallh_thick)*wave +
                   (1 + wave|site_id/id), 
                 data = pfactor_red, 
                 control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-thick_b12i <- as.data.frame(c(summary(thick12)$coefficients[14,1]))
-thick_se12i <- as.data.frame(c(summary(thick12)$coefficients[14,2]))
-thick_p12i <- as.data.frame(c(summary(thick12)$coefficients[14,5]))
-thick_b12s <- as.data.frame(c(summary(thick12)$coefficients[16,1]))
-thick_se12s <- as.data.frame(c(summary(thick12)$coefficients[16,2]))
-thick_p12s <- as.data.frame(c(summary(thick12)$coefficients[16,5]))
+thick_b12s <- as.data.frame(c(summary(thick12)$coefficients[12,1]))
+thick_se12s <- as.data.frame(c(summary(thick12)$coefficients[12,2]))
+thick_p12s <- as.data.frame(c(summary(thick12)$coefficients[12,5]))
 
-thick13 <- lmer(scaleint ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+thick13 <- lmer(scaleint ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                   site_mobfrlh_thick_cent + scale(subj_mobfrlh_thick) + site_mobfrlh_thick_cent*wave + scale(subj_mobfrlh_thick)*wave +
                   (1 + wave|site_id/id), 
                 data = pfactor_red, 
                 control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-thick_b13i <- as.data.frame(c(summary(thick13)$coefficients[14,1]))
-thick_se13i <- as.data.frame(c(summary(thick13)$coefficients[14,2]))
-thick_p13i <- as.data.frame(c(summary(thick13)$coefficients[14,5]))
-thick_b13s <- as.data.frame(c(summary(thick13)$coefficients[16,1]))
-thick_se13s <- as.data.frame(c(summary(thick13)$coefficients[16,2]))
-thick_p13s <- as.data.frame(c(summary(thick13)$coefficients[16,5]))
+thick_b13s <- as.data.frame(c(summary(thick13)$coefficients[12,1]))
+thick_se13s <- as.data.frame(c(summary(thick13)$coefficients[12,2]))
+thick_p13s <- as.data.frame(c(summary(thick13)$coefficients[12,5]))
 
-thick14 <- lmer(scaleint ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+thick14 <- lmer(scaleint ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                   site_mdtmlh_thick_cent + scale(subj_mdtmlh_thick) + site_mdtmlh_thick_cent*wave + scale(subj_mdtmlh_thick)*wave +
                   (1 + wave|site_id/id), 
                 data = pfactor_red, 
                 control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-thick_b14i <- as.data.frame(c(summary(thick14)$coefficients[14,1]))
-thick_se14i <- as.data.frame(c(summary(thick14)$coefficients[14,2]))
-thick_p14i <- as.data.frame(c(summary(thick14)$coefficients[14,5]))
-thick_b14s <- as.data.frame(c(summary(thick14)$coefficients[16,1]))
-thick_se14s <- as.data.frame(c(summary(thick14)$coefficients[16,2]))
-thick_p14s <- as.data.frame(c(summary(thick14)$coefficients[16,5]))
+thick_b14s <- as.data.frame(c(summary(thick14)$coefficients[12,1]))
+thick_se14s <- as.data.frame(c(summary(thick14)$coefficients[12,2]))
+thick_p14s <- as.data.frame(c(summary(thick14)$coefficients[12,5]))
 
-thick15 <- lmer(scaleint ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+thick15 <- lmer(scaleint ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                   site_parahpallh_thick_cent + scale(subj_parahpallh_thick) + site_parahpallh_thick_cent*wave + scale(subj_parahpallh_thick)*wave +
                   (1 + wave|site_id/id), 
                 data = pfactor_red, 
                 control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-thick_b15i <- as.data.frame(c(summary(thick15)$coefficients[14,1]))
-thick_se15i <- as.data.frame(c(summary(thick15)$coefficients[14,2]))
-thick_p15i <- as.data.frame(c(summary(thick15)$coefficients[14,5]))
-thick_b15s <- as.data.frame(c(summary(thick15)$coefficients[16,1]))
-thick_se15s <- as.data.frame(c(summary(thick15)$coefficients[16,2]))
-thick_p15s <- as.data.frame(c(summary(thick15)$coefficients[16,5]))
+thick_b15s <- as.data.frame(c(summary(thick15)$coefficients[12,1]))
+thick_se15s <- as.data.frame(c(summary(thick15)$coefficients[12,2]))
+thick_p15s <- as.data.frame(c(summary(thick15)$coefficients[12,5]))
 
-thick16 <- lmer(scaleint ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+thick16 <- lmer(scaleint ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                   site_paracnlh_thick_cent + scale(subj_paracnlh_thick) + site_paracnlh_thick_cent*wave + scale(subj_paracnlh_thick)*wave +
                   (1 + wave|site_id/id), 
                 data = pfactor_red, 
                 control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-thick_b16i <- as.data.frame(c(summary(thick16)$coefficients[14,1]))
-thick_se16i <- as.data.frame(c(summary(thick16)$coefficients[14,2]))
-thick_p16i <- as.data.frame(c(summary(thick16)$coefficients[14,5]))
-thick_b16s <- as.data.frame(c(summary(thick16)$coefficients[16,1]))
-thick_se16s <- as.data.frame(c(summary(thick16)$coefficients[16,2]))
-thick_p16s <- as.data.frame(c(summary(thick16)$coefficients[16,5]))
+thick_b16s <- as.data.frame(c(summary(thick16)$coefficients[12,1]))
+thick_se16s <- as.data.frame(c(summary(thick16)$coefficients[12,2]))
+thick_p16s <- as.data.frame(c(summary(thick16)$coefficients[12,5]))
 
-thick17 <- lmer(scaleint ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+thick17 <- lmer(scaleint ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                   site_parsopclh_thick_cent + scale(subj_parsopclh_thick) + site_parsopclh_thick_cent*wave + scale(subj_parsopclh_thick)*wave +
                   (1 + wave|site_id/id), 
                 data = pfactor_red, 
                 control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-thick_b17i <- as.data.frame(c(summary(thick17)$coefficients[14,1]))
-thick_se17i <- as.data.frame(c(summary(thick17)$coefficients[14,2]))
-thick_p17i <- as.data.frame(c(summary(thick17)$coefficients[14,5]))
-thick_b17s <- as.data.frame(c(summary(thick17)$coefficients[16,1]))
-thick_se17s <- as.data.frame(c(summary(thick17)$coefficients[16,2]))
-thick_p17s <- as.data.frame(c(summary(thick17)$coefficients[16,5]))
+thick_b17s <- as.data.frame(c(summary(thick17)$coefficients[12,1]))
+thick_se17s <- as.data.frame(c(summary(thick17)$coefficients[12,2]))
+thick_p17s <- as.data.frame(c(summary(thick17)$coefficients[12,5]))
 
-thick18 <- lmer(scaleint ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+thick18 <- lmer(scaleint ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                   site_parsobislh_thick_cent + scale(subj_parsobislh_thick) + site_parsobislh_thick_cent*wave + scale(subj_parsobislh_thick)*wave +
                   (1 + wave|site_id/id), 
                 data = pfactor_red, 
                 control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-thick_b18i <- as.data.frame(c(summary(thick18)$coefficients[14,1]))
-thick_se18i <- as.data.frame(c(summary(thick18)$coefficients[14,2]))
-thick_p18i <- as.data.frame(c(summary(thick18)$coefficients[14,5]))
-thick_b18s <- as.data.frame(c(summary(thick18)$coefficients[16,1]))
-thick_se18s <- as.data.frame(c(summary(thick18)$coefficients[16,2]))
-thick_p18s <- as.data.frame(c(summary(thick18)$coefficients[16,5]))
+thick_b18s <- as.data.frame(c(summary(thick18)$coefficients[12,1]))
+thick_se18s <- as.data.frame(c(summary(thick18)$coefficients[12,2]))
+thick_p18s <- as.data.frame(c(summary(thick18)$coefficients[12,5]))
 
-thick19 <- lmer(scaleint ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+thick19 <- lmer(scaleint ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                   site_parstgrislh_thick_cent + scale(subj_parstgrislh_thick) + site_parstgrislh_thick_cent*wave + scale(subj_parstgrislh_thick)*wave +
                   (1 + wave|site_id/id), 
                 data = pfactor_red, 
                 control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-thick_b19i <- as.data.frame(c(summary(thick19)$coefficients[14,1]))
-thick_se19i <- as.data.frame(c(summary(thick19)$coefficients[14,2]))
-thick_p19i <- as.data.frame(c(summary(thick19)$coefficients[14,5]))
-thick_b19s <- as.data.frame(c(summary(thick19)$coefficients[16,1]))
-thick_se19s <- as.data.frame(c(summary(thick19)$coefficients[16,2]))
-thick_p19s <- as.data.frame(c(summary(thick19)$coefficients[16,5]))
+thick_b19s <- as.data.frame(c(summary(thick19)$coefficients[12,1]))
+thick_se19s <- as.data.frame(c(summary(thick19)$coefficients[12,2]))
+thick_p19s <- as.data.frame(c(summary(thick19)$coefficients[12,5]))
 
 
-thick20 <- lmer(scaleint ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+thick20 <- lmer(scaleint ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                   site_pericclh_thick_cent + scale(subj_pericclh_thick) + site_pericclh_thick_cent*wave + scale(subj_pericclh_thick)*wave +
                   (1 + wave|site_id/id), 
                 data = pfactor_red, 
                 control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-thick_b20i <- as.data.frame(c(summary(thick20)$coefficients[14,1]))
-thick_se20i <- as.data.frame(c(summary(thick20)$coefficients[14,2]))
-thick_p20i <- as.data.frame(c(summary(thick20)$coefficients[14,5]))
-thick_b20s <- as.data.frame(c(summary(thick20)$coefficients[16,1]))
-thick_se20s <- as.data.frame(c(summary(thick20)$coefficients[16,2]))
-thick_p20s <- as.data.frame(c(summary(thick20)$coefficients[16,5]))
+thick_b20s <- as.data.frame(c(summary(thick20)$coefficients[12,1]))
+thick_se20s <- as.data.frame(c(summary(thick20)$coefficients[12,2]))
+thick_p20s <- as.data.frame(c(summary(thick20)$coefficients[12,5]))
 
-thick21 <- lmer(scaleint ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+thick21 <- lmer(scaleint ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                   site_postcnlh_thick_cent + scale(subj_postcnlh_thick) + site_postcnlh_thick_cent*wave + scale(subj_postcnlh_thick)*wave +
                   (1 + wave|site_id/id), 
                 data = pfactor_red, 
                 control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-thick_b21i <- as.data.frame(c(summary(thick21)$coefficients[14,1]))
-thick_se21i <- as.data.frame(c(summary(thick21)$coefficients[14,2]))
-thick_p21i <- as.data.frame(c(summary(thick21)$coefficients[14,5]))
-thick_b21s <- as.data.frame(c(summary(thick21)$coefficients[16,1]))
-thick_se21s <- as.data.frame(c(summary(thick21)$coefficients[16,2]))
-thick_p21s <- as.data.frame(c(summary(thick21)$coefficients[16,5]))
+thick_b21s <- as.data.frame(c(summary(thick21)$coefficients[12,1]))
+thick_se21s <- as.data.frame(c(summary(thick21)$coefficients[12,2]))
+thick_p21s <- as.data.frame(c(summary(thick21)$coefficients[12,5]))
 
-thick22 <- lmer(scaleint ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+thick22 <- lmer(scaleint ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                   site_ptcatelh_thick_cent + scale(subj_ptcatelh_thick) + site_ptcatelh_thick_cent*wave + scale(subj_ptcatelh_thick)*wave +
                   (1 + wave|site_id/id), 
                 data = pfactor_red, 
                 control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-thick_b22i <- as.data.frame(c(summary(thick22)$coefficients[14,1]))
-thick_se22i <- as.data.frame(c(summary(thick22)$coefficients[14,2]))
-thick_p22i <- as.data.frame(c(summary(thick22)$coefficients[14,5]))
-thick_b22s <- as.data.frame(c(summary(thick22)$coefficients[16,1]))
-thick_se22s <- as.data.frame(c(summary(thick22)$coefficients[16,2]))
-thick_p22s <- as.data.frame(c(summary(thick22)$coefficients[16,5]))
+thick_b22s <- as.data.frame(c(summary(thick22)$coefficients[12,1]))
+thick_se22s <- as.data.frame(c(summary(thick22)$coefficients[12,2]))
+thick_p22s <- as.data.frame(c(summary(thick22)$coefficients[12,5]))
 
-thick23 <- lmer(scaleint ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+thick23 <- lmer(scaleint ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                   site_precnlh_thick_cent + scale(subj_precnlh_thick) + site_precnlh_thick_cent*wave + scale(subj_precnlh_thick)*wave +
                   (1 + wave|site_id/id), 
                 data = pfactor_red, 
                 control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-thick_b23i <- as.data.frame(c(summary(thick23)$coefficients[14,1]))
-thick_se23i <- as.data.frame(c(summary(thick23)$coefficients[14,2]))
-thick_p23i <- as.data.frame(c(summary(thick23)$coefficients[14,5]))
-thick_b23s <- as.data.frame(c(summary(thick23)$coefficients[16,1]))
-thick_se23s <- as.data.frame(c(summary(thick23)$coefficients[16,2]))
-thick_p23s <- as.data.frame(c(summary(thick23)$coefficients[16,5]))
+thick_b23s <- as.data.frame(c(summary(thick23)$coefficients[12,1]))
+thick_se23s <- as.data.frame(c(summary(thick23)$coefficients[12,2]))
+thick_p23s <- as.data.frame(c(summary(thick23)$coefficients[12,5]))
 
-thick24 <- lmer(scaleint ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+thick24 <- lmer(scaleint ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                   site_pclh_thick_cent + scale(subj_pclh_thick) + site_pclh_thick_cent*wave + scale(subj_pclh_thick)*wave +
                   (1 + wave|site_id/id), 
                 data = pfactor_red, 
                 control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-thick_b24i <- as.data.frame(c(summary(thick24)$coefficients[14,1]))
-thick_se24i <- as.data.frame(c(summary(thick24)$coefficients[14,2]))
-thick_p24i <- as.data.frame(c(summary(thick24)$coefficients[14,5]))
-thick_b24s <- as.data.frame(c(summary(thick24)$coefficients[16,1]))
-thick_se24s <- as.data.frame(c(summary(thick24)$coefficients[16,2]))
-thick_p24s <- as.data.frame(c(summary(thick24)$coefficients[16,5]))
+thick_b24s <- as.data.frame(c(summary(thick24)$coefficients[12,1]))
+thick_se24s <- as.data.frame(c(summary(thick24)$coefficients[12,2]))
+thick_p24s <- as.data.frame(c(summary(thick24)$coefficients[12,5]))
 
-thick25 <- lmer(scaleint ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+thick25 <- lmer(scaleint ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                   site_rracatelh_thick_cent + scale(subj_rracatelh_thick) + site_rracatelh_thick_cent*wave + scale(subj_rracatelh_thick)*wave +
                   (1 + wave|site_id/id), 
                 data = pfactor_red, 
                 control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-thick_b25i <- as.data.frame(c(summary(thick25)$coefficients[14,1]))
-thick_se25i <- as.data.frame(c(summary(thick25)$coefficients[14,2]))
-thick_p25i <- as.data.frame(c(summary(thick25)$coefficients[14,5]))
-thick_b25s <- as.data.frame(c(summary(thick25)$coefficients[16,1]))
-thick_se25s <- as.data.frame(c(summary(thick25)$coefficients[16,2]))
-thick_p25s <- as.data.frame(c(summary(thick25)$coefficients[16,5]))
+thick_b25s <- as.data.frame(c(summary(thick25)$coefficients[12,1]))
+thick_se25s <- as.data.frame(c(summary(thick25)$coefficients[12,2]))
+thick_p25s <- as.data.frame(c(summary(thick25)$coefficients[12,5]))
 
-thick26 <- lmer(scaleint ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+thick26 <- lmer(scaleint ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                   site_rrmdfrlh_thick_cent + scale(subj_rrmdfrlh_thick) + site_rrmdfrlh_thick_cent*wave + scale(subj_rrmdfrlh_thick)*wave +
                   (1 + wave|site_id/id), 
                 data = pfactor_red, 
                 control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-thick_b26i <- as.data.frame(c(summary(thick26)$coefficients[14,1]))
-thick_se26i <- as.data.frame(c(summary(thick26)$coefficients[14,2]))
-thick_p26i <- as.data.frame(c(summary(thick26)$coefficients[14,5]))
-thick_b26s <- as.data.frame(c(summary(thick26)$coefficients[16,1]))
-thick_se26s <- as.data.frame(c(summary(thick26)$coefficients[16,2]))
-thick_p26s <- as.data.frame(c(summary(thick26)$coefficients[16,5]))
+thick_b26s <- as.data.frame(c(summary(thick26)$coefficients[12,1]))
+thick_se26s <- as.data.frame(c(summary(thick26)$coefficients[12,2]))
+thick_p26s <- as.data.frame(c(summary(thick26)$coefficients[12,5]))
 
-thick27 <- lmer(scaleint ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+thick27 <- lmer(scaleint ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                   site_sufrlh_thick_cent + scale(subj_sufrlh_thick) + site_sufrlh_thick_cent*wave + scale(subj_sufrlh_thick)*wave +
                   (1 + wave|site_id/id), 
                 data = pfactor_red, 
                 control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-thick_b27i <- as.data.frame(c(summary(thick27)$coefficients[14,1]))
-thick_se27i <- as.data.frame(c(summary(thick27)$coefficients[14,2]))
-thick_p27i <- as.data.frame(c(summary(thick27)$coefficients[14,5]))
-thick_b27s <- as.data.frame(c(summary(thick27)$coefficients[16,1]))
-thick_se27s <- as.data.frame(c(summary(thick27)$coefficients[16,2]))
-thick_p27s <- as.data.frame(c(summary(thick27)$coefficients[16,5]))
+thick_b27s <- as.data.frame(c(summary(thick27)$coefficients[12,1]))
+thick_se27s <- as.data.frame(c(summary(thick27)$coefficients[12,2]))
+thick_p27s <- as.data.frame(c(summary(thick27)$coefficients[12,5]))
 
-thick28 <- lmer(scaleint ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+thick28 <- lmer(scaleint ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                   site_supllh_thick_cent + scale(subj_supllh_thick) + site_supllh_thick_cent*wave + scale(subj_supllh_thick)*wave +
                   (1 + wave|site_id/id), 
                 data = pfactor_red, 
                 control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-thick_b28i <- as.data.frame(c(summary(thick28)$coefficients[14,1]))
-thick_se28i <- as.data.frame(c(summary(thick28)$coefficients[14,2]))
-thick_p28i <- as.data.frame(c(summary(thick28)$coefficients[14,5]))
-thick_b28s <- as.data.frame(c(summary(thick28)$coefficients[16,1]))
-thick_se28s <- as.data.frame(c(summary(thick28)$coefficients[16,2]))
-thick_p28s <- as.data.frame(c(summary(thick28)$coefficients[16,5]))
+thick_b28s <- as.data.frame(c(summary(thick28)$coefficients[12,1]))
+thick_se28s <- as.data.frame(c(summary(thick28)$coefficients[12,2]))
+thick_p28s <- as.data.frame(c(summary(thick28)$coefficients[12,5]))
 
-thick29 <- lmer(scaleint ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+thick29 <- lmer(scaleint ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                   site_sutmlh_thick_cent + scale(subj_sutmlh_thick) + site_sutmlh_thick_cent*wave + scale(subj_sutmlh_thick)*wave +
                   (1 + wave|site_id/id), 
                 data = pfactor_red, 
                 control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-thick_b29i <- as.data.frame(c(summary(thick29)$coefficients[14,1]))
-thick_se29i <- as.data.frame(c(summary(thick29)$coefficients[14,2]))
-thick_p29i <- as.data.frame(c(summary(thick29)$coefficients[14,5]))
-thick_b29s <- as.data.frame(c(summary(thick29)$coefficients[16,1]))
-thick_se29s <- as.data.frame(c(summary(thick29)$coefficients[16,2]))
-thick_p29s <- as.data.frame(c(summary(thick29)$coefficients[16,5]))
+thick_b29s <- as.data.frame(c(summary(thick29)$coefficients[12,1]))
+thick_se29s <- as.data.frame(c(summary(thick29)$coefficients[12,2]))
+thick_p29s <- as.data.frame(c(summary(thick29)$coefficients[12,5]))
 
-thick30 <- lmer(scaleint ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+thick30 <- lmer(scaleint ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                   site_smlh_thick_cent + scale(subj_smlh_thick) + site_smlh_thick_cent*wave + scale(subj_smlh_thick)*wave +
                   (1 + wave|site_id/id), 
                 data = pfactor_red, 
                 control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-thick_b30i <- as.data.frame(c(summary(thick30)$coefficients[14,1]))
-thick_se30i <- as.data.frame(c(summary(thick30)$coefficients[14,2]))
-thick_p30i <- as.data.frame(c(summary(thick30)$coefficients[14,5]))
-thick_b30s <- as.data.frame(c(summary(thick30)$coefficients[16,1]))
-thick_se30s <- as.data.frame(c(summary(thick30)$coefficients[16,2]))
-thick_p30s <- as.data.frame(c(summary(thick30)$coefficients[16,5]))
+thick_b30s <- as.data.frame(c(summary(thick30)$coefficients[12,1]))
+thick_se30s <- as.data.frame(c(summary(thick30)$coefficients[12,2]))
+thick_p30s <- as.data.frame(c(summary(thick30)$coefficients[12,5]))
 
-thick31 <- lmer(scaleint ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+thick31 <- lmer(scaleint ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                   site_frpolelh_thick_cent + scale(subj_frpolelh_thick) + site_frpolelh_thick_cent*wave + scale(subj_frpolelh_thick)*wave +
                   (1 + wave|site_id/id), 
                 data = pfactor_red, 
                 control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-thick_b31i <- as.data.frame(c(summary(thick31)$coefficients[14,1]))
-thick_se31i <- as.data.frame(c(summary(thick31)$coefficients[14,2]))
-thick_p31i <- as.data.frame(c(summary(thick31)$coefficients[14,5]))
-thick_b31s <- as.data.frame(c(summary(thick31)$coefficients[16,1]))
-thick_se31s <- as.data.frame(c(summary(thick31)$coefficients[16,2]))
-thick_p31s <- as.data.frame(c(summary(thick31)$coefficients[16,5]))
+thick_b31s <- as.data.frame(c(summary(thick31)$coefficients[12,1]))
+thick_se31s <- as.data.frame(c(summary(thick31)$coefficients[12,2]))
+thick_p31s <- as.data.frame(c(summary(thick31)$coefficients[12,5]))
 
-thick32 <- lmer(scaleint ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+thick32 <- lmer(scaleint ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                   site_tmpolelh_thick_cent + scale(subj_tmpolelh_thick) + site_tmpolelh_thick_cent*wave + scale(subj_tmpolelh_thick)*wave +
                   (1 + wave|site_id/id), 
                 data = pfactor_red, 
                 control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-thick_b32i <- as.data.frame(c(summary(thick32)$coefficients[14,1]))
-thick_se32i <- as.data.frame(c(summary(thick32)$coefficients[14,2]))
-thick_p32i <- as.data.frame(c(summary(thick32)$coefficients[14,5]))
-thick_b32s <- as.data.frame(c(summary(thick32)$coefficients[16,1]))
-thick_se32s <- as.data.frame(c(summary(thick32)$coefficients[16,2]))
-thick_p32s <- as.data.frame(c(summary(thick32)$coefficients[16,5]))
+thick_b32s <- as.data.frame(c(summary(thick32)$coefficients[12,1]))
+thick_se32s <- as.data.frame(c(summary(thick32)$coefficients[12,2]))
+thick_p32s <- as.data.frame(c(summary(thick32)$coefficients[12,5]))
 
-thick33 <- lmer(scaleint ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+thick33 <- lmer(scaleint ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                   site_trvtmlh_thick_cent + scale(subj_trvtmlh_thick) + site_trvtmlh_thick_cent*wave + scale(subj_trvtmlh_thick)*wave +
                   (1 + wave|site_id/id), 
                 data = pfactor_red, 
                 control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-thick_b33i <- as.data.frame(c(summary(thick33)$coefficients[14,1]))
-thick_se33i <- as.data.frame(c(summary(thick33)$coefficients[14,2]))
-thick_p33i <- as.data.frame(c(summary(thick33)$coefficients[14,5]))
-thick_b33s <- as.data.frame(c(summary(thick33)$coefficients[16,1]))
-thick_se33s <- as.data.frame(c(summary(thick33)$coefficients[16,2]))
-thick_p33s <- as.data.frame(c(summary(thick33)$coefficients[16,5]))
+thick_b33s <- as.data.frame(c(summary(thick33)$coefficients[12,1]))
+thick_se33s <- as.data.frame(c(summary(thick33)$coefficients[12,2]))
+thick_p33s <- as.data.frame(c(summary(thick33)$coefficients[12,5]))
 
-thick34 <- lmer(scaleint ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+thick34 <- lmer(scaleint ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                   site_insulalh_thick_cent + scale(subj_insulalh_thick) + site_insulalh_thick_cent*wave + scale(subj_insulalh_thick)*wave +
                   (1 + wave|site_id/id), 
                 data = pfactor_red, 
                 control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-thick_b34i <- as.data.frame(c(summary(thick34)$coefficients[14,1]))
-thick_se34i <- as.data.frame(c(summary(thick34)$coefficients[14,2]))
-thick_p34i <- as.data.frame(c(summary(thick34)$coefficients[14,5]))
-thick_b34s <- as.data.frame(c(summary(thick34)$coefficients[16,1]))
-thick_se34s <- as.data.frame(c(summary(thick34)$coefficients[16,2]))
-thick_p34s <- as.data.frame(c(summary(thick34)$coefficients[16,5]))
+thick_b34s <- as.data.frame(c(summary(thick34)$coefficients[12,1]))
+thick_se34s <- as.data.frame(c(summary(thick34)$coefficients[12,2]))
+thick_p34s <- as.data.frame(c(summary(thick34)$coefficients[12,5]))
 
-thick35 <- lmer(scaleint ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+thick35 <- lmer(scaleint ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                   site_banksstsrh_thick_cent + scale(subj_banksstsrh_thick) + site_banksstsrh_thick_cent*wave + scale(subj_banksstsrh_thick)*wave +
                   (1 + wave|site_id/id), 
                 data = pfactor_red, 
                 control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-thick_b35i <- as.data.frame(c(summary(thick35)$coefficients[14,1]))
-thick_se35i <- as.data.frame(c(summary(thick35)$coefficients[14,2]))
-thick_p35i <- as.data.frame(c(summary(thick35)$coefficients[14,5]))
-thick_b35s <- as.data.frame(c(summary(thick35)$coefficients[16,1]))
-thick_se35s <- as.data.frame(c(summary(thick35)$coefficients[16,2]))
-thick_p35s <- as.data.frame(c(summary(thick35)$coefficients[16,5]))
+thick_b35s <- as.data.frame(c(summary(thick35)$coefficients[12,1]))
+thick_se35s <- as.data.frame(c(summary(thick35)$coefficients[12,2]))
+thick_p35s <- as.data.frame(c(summary(thick35)$coefficients[12,5]))
 
-thick36 <- lmer(scaleint ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+thick36 <- lmer(scaleint ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                   site_cdacaterh_thick_cent + scale(subj_cdacaterh_thick) + site_cdacaterh_thick_cent*wave + scale(subj_cdacaterh_thick)*wave +
                   (1 + wave|site_id/id), 
                 data = pfactor_red, 
                 control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-thick_b36i <- as.data.frame(c(summary(thick36)$coefficients[14,1]))
-thick_se36i <- as.data.frame(c(summary(thick36)$coefficients[14,2]))
-thick_p36i <- as.data.frame(c(summary(thick36)$coefficients[14,5]))
-thick_b36s <- as.data.frame(c(summary(thick36)$coefficients[16,1]))
-thick_se36s <- as.data.frame(c(summary(thick36)$coefficients[16,2]))
-thick_p36s <- as.data.frame(c(summary(thick36)$coefficients[16,5]))
+thick_b36s <- as.data.frame(c(summary(thick36)$coefficients[12,1]))
+thick_se36s <- as.data.frame(c(summary(thick36)$coefficients[12,2]))
+thick_p36s <- as.data.frame(c(summary(thick36)$coefficients[12,5]))
 
-thick37 <- lmer(scaleint ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+thick37 <- lmer(scaleint ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                   site_cdmdfrrh_thick_cent + scale(subj_cdmdfrrh_thick) + site_cdmdfrrh_thick_cent*wave + scale(subj_cdmdfrrh_thick)*wave +
                   (1 + wave|site_id/id), 
                 data = pfactor_red, 
                 control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-thick_b37i <- as.data.frame(c(summary(thick37)$coefficients[14,1]))
-thick_se37i <- as.data.frame(c(summary(thick37)$coefficients[14,2]))
-thick_p37i <- as.data.frame(c(summary(thick37)$coefficients[14,5]))
-thick_b37s <- as.data.frame(c(summary(thick37)$coefficients[16,1]))
-thick_se37s <- as.data.frame(c(summary(thick37)$coefficients[16,2]))
-thick_p37s <- as.data.frame(c(summary(thick37)$coefficients[16,5]))
+thick_b37s <- as.data.frame(c(summary(thick37)$coefficients[12,1]))
+thick_se37s <- as.data.frame(c(summary(thick37)$coefficients[12,2]))
+thick_p37s <- as.data.frame(c(summary(thick37)$coefficients[12,5]))
 
-thick38 <- lmer(scaleint ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+thick38 <- lmer(scaleint ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                   site_cuneusrh_thick_cent + scale(subj_cuneusrh_thick) + site_cuneusrh_thick_cent*wave + scale(subj_cuneusrh_thick)*wave +
                   (1 + wave|site_id/id), 
                 data = pfactor_red, 
                 control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-thick_b38i <- as.data.frame(c(summary(thick38)$coefficients[14,1]))
-thick_se38i <- as.data.frame(c(summary(thick38)$coefficients[14,2]))
-thick_p38i <- as.data.frame(c(summary(thick38)$coefficients[14,5]))
-thick_b38s <- as.data.frame(c(summary(thick38)$coefficients[16,1]))
-thick_se38s <- as.data.frame(c(summary(thick38)$coefficients[16,2]))
-thick_p38s <- as.data.frame(c(summary(thick38)$coefficients[16,5]))
+thick_b38s <- as.data.frame(c(summary(thick38)$coefficients[12,1]))
+thick_se38s <- as.data.frame(c(summary(thick38)$coefficients[12,2]))
+thick_p38s <- as.data.frame(c(summary(thick38)$coefficients[12,5]))
 
-thick39 <- lmer(scaleint ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+thick39 <- lmer(scaleint ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                   site_ehinalrh_thick_cent + scale(subj_ehinalrh_thick) + site_ehinalrh_thick_cent*wave + scale(subj_ehinalrh_thick)*wave +
                   (1 + wave|site_id/id), 
                 data = pfactor_red, 
                 control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-thick_b39i <- as.data.frame(c(summary(thick39)$coefficients[14,1]))
-thick_se39i <- as.data.frame(c(summary(thick39)$coefficients[14,2]))
-thick_p39i <- as.data.frame(c(summary(thick39)$coefficients[14,5]))
-thick_b39s <- as.data.frame(c(summary(thick39)$coefficients[16,1]))
-thick_se39s <- as.data.frame(c(summary(thick39)$coefficients[16,2]))
-thick_p39s <- as.data.frame(c(summary(thick39)$coefficients[16,5]))
+thick_b39s <- as.data.frame(c(summary(thick39)$coefficients[12,1]))
+thick_se39s <- as.data.frame(c(summary(thick39)$coefficients[12,2]))
+thick_p39s <- as.data.frame(c(summary(thick39)$coefficients[12,5]))
 
-thick40 <- lmer(scaleint ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+thick40 <- lmer(scaleint ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                   site_fusiformrh_thick_cent + scale(subj_fusiformrh_thick) + site_fusiformrh_thick_cent*wave + scale(subj_fusiformrh_thick)*wave +
                   (1 + wave|site_id/id), 
                 data = pfactor_red, 
                 control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-thick_b40i <- as.data.frame(c(summary(thick40)$coefficients[14,1]))
-thick_se40i <- as.data.frame(c(summary(thick40)$coefficients[14,2]))
-thick_p40i <- as.data.frame(c(summary(thick40)$coefficients[14,5]))
-thick_b40s <- as.data.frame(c(summary(thick40)$coefficients[16,1]))
-thick_se40s <- as.data.frame(c(summary(thick40)$coefficients[16,2]))
-thick_p40s <- as.data.frame(c(summary(thick40)$coefficients[16,5]))
+thick_b40s <- as.data.frame(c(summary(thick40)$coefficients[12,1]))
+thick_se40s <- as.data.frame(c(summary(thick40)$coefficients[12,2]))
+thick_p40s <- as.data.frame(c(summary(thick40)$coefficients[12,5]))
 
-thick41 <- lmer(scaleint ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+thick41 <- lmer(scaleint ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                   site_ifplrh_thick_cent + scale(subj_ifplrh_thick) + site_ifplrh_thick_cent*wave + scale(subj_ifplrh_thick)*wave +
                   (1 + wave|site_id/id), 
                 data = pfactor_red, 
                 control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-thick_b41i <- as.data.frame(c(summary(thick41)$coefficients[14,1]))
-thick_se41i <- as.data.frame(c(summary(thick41)$coefficients[14,2]))
-thick_p41i <- as.data.frame(c(summary(thick41)$coefficients[14,5]))
-thick_b41s <- as.data.frame(c(summary(thick41)$coefficients[16,1]))
-thick_se41s <- as.data.frame(c(summary(thick41)$coefficients[16,2]))
-thick_p41s <- as.data.frame(c(summary(thick41)$coefficients[16,5]))
+thick_b41s <- as.data.frame(c(summary(thick41)$coefficients[12,1]))
+thick_se41s <- as.data.frame(c(summary(thick41)$coefficients[12,2]))
+thick_p41s <- as.data.frame(c(summary(thick41)$coefficients[12,5]))
 
-thick42 <- lmer(scaleint ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+thick42 <- lmer(scaleint ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                   site_iftmrh_thick_cent + scale(subj_iftmrh_thick) + site_iftmrh_thick_cent*wave + scale(subj_iftmrh_thick)*wave +
                   (1 + wave|site_id/id), 
                 data = pfactor_red, 
                 control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-thick_b42i <- as.data.frame(c(summary(thick42)$coefficients[14,1]))
-thick_se42i <- as.data.frame(c(summary(thick42)$coefficients[14,2]))
-thick_p42i <- as.data.frame(c(summary(thick42)$coefficients[14,5]))
-thick_b42s <- as.data.frame(c(summary(thick42)$coefficients[16,1]))
-thick_se42s <- as.data.frame(c(summary(thick42)$coefficients[16,2]))
-thick_p42s <- as.data.frame(c(summary(thick42)$coefficients[16,5]))
+thick_b42s <- as.data.frame(c(summary(thick42)$coefficients[12,1]))
+thick_se42s <- as.data.frame(c(summary(thick42)$coefficients[12,2]))
+thick_p42s <- as.data.frame(c(summary(thick42)$coefficients[12,5]))
 
-thick43 <- lmer(scaleint ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+thick43 <- lmer(scaleint ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                   site_ihcaterh_thick_cent + scale(subj_ihcaterh_thick) + site_ihcaterh_thick_cent*wave + scale(subj_ihcaterh_thick)*wave +
                   (1 + wave|site_id/id), 
                 data = pfactor_red, 
                 control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-thick_b43i <- as.data.frame(c(summary(thick43)$coefficients[14,1]))
-thick_se43i <- as.data.frame(c(summary(thick43)$coefficients[14,2]))
-thick_p43i <- as.data.frame(c(summary(thick43)$coefficients[14,5]))
-thick_b43s <- as.data.frame(c(summary(thick43)$coefficients[16,1]))
-thick_se43s <- as.data.frame(c(summary(thick43)$coefficients[16,2]))
-thick_p43s <- as.data.frame(c(summary(thick43)$coefficients[16,5]))
+thick_b43s <- as.data.frame(c(summary(thick43)$coefficients[12,1]))
+thick_se43s <- as.data.frame(c(summary(thick43)$coefficients[12,2]))
+thick_p43s <- as.data.frame(c(summary(thick43)$coefficients[12,5]))
 
-thick44 <- lmer(scaleint ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+thick44 <- lmer(scaleint ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                   site_loccrh_thick_cent + scale(subj_loccrh_thick) + site_loccrh_thick_cent*wave + scale(subj_loccrh_thick)*wave +
                   (1 + wave|site_id/id), 
                 data = pfactor_red, 
                 control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-thick_b44i <- as.data.frame(c(summary(thick44)$coefficients[14,1]))
-thick_se44i <- as.data.frame(c(summary(thick44)$coefficients[14,2]))
-thick_p44i <- as.data.frame(c(summary(thick44)$coefficients[14,5]))
-thick_b44s <- as.data.frame(c(summary(thick44)$coefficients[16,1]))
-thick_se44s <- as.data.frame(c(summary(thick44)$coefficients[16,2]))
-thick_p44s <- as.data.frame(c(summary(thick44)$coefficients[16,5]))
+thick_b44s <- as.data.frame(c(summary(thick44)$coefficients[12,1]))
+thick_se44s <- as.data.frame(c(summary(thick44)$coefficients[12,2]))
+thick_p44s <- as.data.frame(c(summary(thick44)$coefficients[12,5]))
 
-thick45 <- lmer(scaleint ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+thick45 <- lmer(scaleint ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                   site_lobfrrh_thick_cent + scale(subj_lobfrrh_thick) + site_lobfrrh_thick_cent*wave + scale(subj_lobfrrh_thick)*wave +
                   (1 + wave|site_id/id), 
                 data = pfactor_red, 
                 control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-thick_b45i <- as.data.frame(c(summary(thick45)$coefficients[14,1]))
-thick_se45i <- as.data.frame(c(summary(thick45)$coefficients[14,2]))
-thick_p45i <- as.data.frame(c(summary(thick45)$coefficients[14,5]))
-thick_b45s <- as.data.frame(c(summary(thick45)$coefficients[16,1]))
-thick_se45s <- as.data.frame(c(summary(thick45)$coefficients[16,2]))
-thick_p45s <- as.data.frame(c(summary(thick45)$coefficients[16,5]))
+thick_b45s <- as.data.frame(c(summary(thick45)$coefficients[12,1]))
+thick_se45s <- as.data.frame(c(summary(thick45)$coefficients[12,2]))
+thick_p45s <- as.data.frame(c(summary(thick45)$coefficients[12,5]))
 
-thick46 <- lmer(scaleint ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+thick46 <- lmer(scaleint ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                   site_lingualrh_thick_cent + scale(subj_lingualrh_thick) + site_lingualrh_thick_cent*wave + scale(subj_lingualrh_thick)*wave +
                   (1 + wave|site_id/id), 
                 data = pfactor_red, 
                 control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-thick_b46i <- as.data.frame(c(summary(thick46)$coefficients[14,1]))
-thick_se46i <- as.data.frame(c(summary(thick46)$coefficients[14,2]))
-thick_p46i <- as.data.frame(c(summary(thick46)$coefficients[14,5]))
-thick_b46s <- as.data.frame(c(summary(thick46)$coefficients[16,1]))
-thick_se46s <- as.data.frame(c(summary(thick46)$coefficients[16,2]))
-thick_p46s <- as.data.frame(c(summary(thick46)$coefficients[16,5]))
+thick_b46s <- as.data.frame(c(summary(thick46)$coefficients[12,1]))
+thick_se46s <- as.data.frame(c(summary(thick46)$coefficients[12,2]))
+thick_p46s <- as.data.frame(c(summary(thick46)$coefficients[12,5]))
 
-thick47 <- lmer(scaleint ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+thick47 <- lmer(scaleint ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                   site_mobfrrh_thick_cent + scale(subj_mobfrrh_thick) + site_mobfrrh_thick_cent*wave + scale(subj_mobfrrh_thick)*wave +
                   (1 + wave|site_id/id), 
                 data = pfactor_red, 
                 control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-thick_b47i <- as.data.frame(c(summary(thick47)$coefficients[14,1]))
-thick_se47i <- as.data.frame(c(summary(thick47)$coefficients[14,2]))
-thick_p47i <- as.data.frame(c(summary(thick47)$coefficients[14,5]))
-thick_b47s <- as.data.frame(c(summary(thick47)$coefficients[16,1]))
-thick_se47s <- as.data.frame(c(summary(thick47)$coefficients[16,2]))
-thick_p47s <- as.data.frame(c(summary(thick47)$coefficients[16,5]))
+thick_b47s <- as.data.frame(c(summary(thick47)$coefficients[12,1]))
+thick_se47s <- as.data.frame(c(summary(thick47)$coefficients[12,2]))
+thick_p47s <- as.data.frame(c(summary(thick47)$coefficients[12,5]))
 
-thick48 <- lmer(scaleint ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+thick48 <- lmer(scaleint ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                   site_mdtmrh_thick_cent + scale(subj_mdtmrh_thick) + site_mdtmrh_thick_cent*wave + scale(subj_mdtmrh_thick)*wave +
                   (1 + wave|site_id/id), 
                 data = pfactor_red, 
                 control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-thick_b48i <- as.data.frame(c(summary(thick48)$coefficients[14,1]))
-thick_se48i <- as.data.frame(c(summary(thick48)$coefficients[14,2]))
-thick_p48i <- as.data.frame(c(summary(thick48)$coefficients[14,5]))
-thick_b48s <- as.data.frame(c(summary(thick48)$coefficients[16,1]))
-thick_se48s <- as.data.frame(c(summary(thick48)$coefficients[16,2]))
-thick_p48s <- as.data.frame(c(summary(thick48)$coefficients[16,5]))
+thick_b48s <- as.data.frame(c(summary(thick48)$coefficients[12,1]))
+thick_se48s <- as.data.frame(c(summary(thick48)$coefficients[12,2]))
+thick_p48s <- as.data.frame(c(summary(thick48)$coefficients[12,5]))
 
-thick49 <- lmer(scaleint ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+thick49 <- lmer(scaleint ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                   site_parahpalrh_thick_cent + scale(subj_parahpalrh_thick) + site_parahpalrh_thick_cent*wave + scale(subj_parahpalrh_thick)*wave +
                   (1 + wave|site_id/id), 
                 data = pfactor_red, 
                 control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-thick_b49i <- as.data.frame(c(summary(thick49)$coefficients[14,1]))
-thick_se49i <- as.data.frame(c(summary(thick49)$coefficients[14,2]))
-thick_p49i <- as.data.frame(c(summary(thick49)$coefficients[14,5]))
-thick_b49s <- as.data.frame(c(summary(thick49)$coefficients[16,1]))
-thick_se49s <- as.data.frame(c(summary(thick49)$coefficients[16,2]))
-thick_p49s <- as.data.frame(c(summary(thick49)$coefficients[16,5]))
+thick_b49s <- as.data.frame(c(summary(thick49)$coefficients[12,1]))
+thick_se49s <- as.data.frame(c(summary(thick49)$coefficients[12,2]))
+thick_p49s <- as.data.frame(c(summary(thick49)$coefficients[12,5]))
 
-thick50 <- lmer(scaleint ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+thick50 <- lmer(scaleint ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                   site_paracnrh_thick_cent + scale(subj_paracnrh_thick) + site_paracnrh_thick_cent*wave + scale(subj_paracnrh_thick)*wave +
                   (1 + wave|site_id/id), 
                 data = pfactor_red, 
                 control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-thick_b50i <- as.data.frame(c(summary(thick50)$coefficients[14,1]))
-thick_se50i <- as.data.frame(c(summary(thick50)$coefficients[14,2]))
-thick_p50i <- as.data.frame(c(summary(thick50)$coefficients[14,5]))
-thick_b50s <- as.data.frame(c(summary(thick50)$coefficients[16,1]))
-thick_se50s <- as.data.frame(c(summary(thick50)$coefficients[16,2]))
-thick_p50s <- as.data.frame(c(summary(thick50)$coefficients[16,5]))
+thick_b50s <- as.data.frame(c(summary(thick50)$coefficients[12,1]))
+thick_se50s <- as.data.frame(c(summary(thick50)$coefficients[12,2]))
+thick_p50s <- as.data.frame(c(summary(thick50)$coefficients[12,5]))
 
-thick51 <- lmer(scaleint ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+thick51 <- lmer(scaleint ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                   site_parsopcrh_thick_cent + scale(subj_parsopcrh_thick) + site_parsopcrh_thick_cent*wave + scale(subj_parsopcrh_thick)*wave +
                   (1 + wave|site_id/id), 
                 data = pfactor_red, 
                 control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-thick_b51i <- as.data.frame(c(summary(thick51)$coefficients[14,1]))
-thick_se51i <- as.data.frame(c(summary(thick51)$coefficients[14,2]))
-thick_p51i <- as.data.frame(c(summary(thick51)$coefficients[14,5]))
-thick_b51s <- as.data.frame(c(summary(thick51)$coefficients[16,1]))
-thick_se51s <- as.data.frame(c(summary(thick51)$coefficients[16,2]))
-thick_p51s <- as.data.frame(c(summary(thick51)$coefficients[16,5]))
+thick_b51s <- as.data.frame(c(summary(thick51)$coefficients[12,1]))
+thick_se51s <- as.data.frame(c(summary(thick51)$coefficients[12,2]))
+thick_p51s <- as.data.frame(c(summary(thick51)$coefficients[12,5]))
 
-thick52 <- lmer(scaleint ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+thick52 <- lmer(scaleint ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                   site_parsobisrh_thick_cent + scale(subj_parsobisrh_thick) + site_parsobisrh_thick_cent*wave + scale(subj_parsobisrh_thick)*wave +
                   (1 + wave|site_id/id), 
                 data = pfactor_red, 
                 control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-thick_b52i <- as.data.frame(c(summary(thick52)$coefficients[14,1]))
-thick_se52i <- as.data.frame(c(summary(thick52)$coefficients[14,2]))
-thick_p52i <- as.data.frame(c(summary(thick52)$coefficients[14,5]))
-thick_b52s <- as.data.frame(c(summary(thick52)$coefficients[16,1]))
-thick_se52s <- as.data.frame(c(summary(thick52)$coefficients[16,2]))
-thick_p52s <- as.data.frame(c(summary(thick52)$coefficients[16,5]))
+thick_b52s <- as.data.frame(c(summary(thick52)$coefficients[12,1]))
+thick_se52s <- as.data.frame(c(summary(thick52)$coefficients[12,2]))
+thick_p52s <- as.data.frame(c(summary(thick52)$coefficients[12,5]))
 
-thick53 <- lmer(scaleint ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+thick53 <- lmer(scaleint ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                   site_parstgrisrh_thick_cent + scale(subj_parstgrisrh_thick) + site_parstgrisrh_thick_cent*wave + scale(subj_parstgrisrh_thick)*wave +
                   (1 + wave|site_id/id), 
                 data = pfactor_red, 
                 control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-thick_b53i <- as.data.frame(c(summary(thick53)$coefficients[14,1]))
-thick_se53i <- as.data.frame(c(summary(thick53)$coefficients[14,2]))
-thick_p53i <- as.data.frame(c(summary(thick53)$coefficients[14,5]))
-thick_b53s <- as.data.frame(c(summary(thick53)$coefficients[16,1]))
-thick_se53s <- as.data.frame(c(summary(thick53)$coefficients[16,2]))
-thick_p53s <- as.data.frame(c(summary(thick53)$coefficients[16,5]))
+thick_b53s <- as.data.frame(c(summary(thick53)$coefficients[12,1]))
+thick_se53s <- as.data.frame(c(summary(thick53)$coefficients[12,2]))
+thick_p53s <- as.data.frame(c(summary(thick53)$coefficients[12,5]))
 
-thick54 <- lmer(scaleint ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+thick54 <- lmer(scaleint ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                   site_periccrh_thick_cent + scale(subj_periccrh_thick) + site_periccrh_thick_cent*wave + scale(subj_periccrh_thick)*wave +
                   (1 + wave|site_id/id), 
                 data = pfactor_red, 
                 control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-thick_b54i <- as.data.frame(c(summary(thick54)$coefficients[14,1]))
-thick_se54i <- as.data.frame(c(summary(thick54)$coefficients[14,2]))
-thick_p54i <- as.data.frame(c(summary(thick54)$coefficients[14,5]))
-thick_b54s <- as.data.frame(c(summary(thick54)$coefficients[16,1]))
-thick_se54s <- as.data.frame(c(summary(thick54)$coefficients[16,2]))
-thick_p54s <- as.data.frame(c(summary(thick54)$coefficients[16,5]))
+thick_b54s <- as.data.frame(c(summary(thick54)$coefficients[12,1]))
+thick_se54s <- as.data.frame(c(summary(thick54)$coefficients[12,2]))
+thick_p54s <- as.data.frame(c(summary(thick54)$coefficients[12,5]))
 
-thick55 <- lmer(scaleint ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+thick55 <- lmer(scaleint ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                   site_postcnrh_thick_cent + scale(subj_postcnrh_thick) + site_postcnrh_thick_cent*wave + scale(subj_postcnrh_thick)*wave +
                   (1 + wave|site_id/id), 
                 data = pfactor_red, 
                 control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-thick_b55i <- as.data.frame(c(summary(thick55)$coefficients[14,1]))
-thick_se55i <- as.data.frame(c(summary(thick55)$coefficients[14,2]))
-thick_p55i <- as.data.frame(c(summary(thick55)$coefficients[14,5]))
-thick_b55s <- as.data.frame(c(summary(thick55)$coefficients[16,1]))
-thick_se55s <- as.data.frame(c(summary(thick55)$coefficients[16,2]))
-thick_p55s <- as.data.frame(c(summary(thick55)$coefficients[16,5]))
+thick_b55s <- as.data.frame(c(summary(thick55)$coefficients[12,1]))
+thick_se55s <- as.data.frame(c(summary(thick55)$coefficients[12,2]))
+thick_p55s <- as.data.frame(c(summary(thick55)$coefficients[12,5]))
 
-thick56 <- lmer(scaleint ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+thick56 <- lmer(scaleint ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                   site_ptcaterh_thick_cent + scale(subj_ptcaterh_thick) + site_ptcaterh_thick_cent*wave + scale(subj_ptcaterh_thick)*wave +
                   (1 + wave|site_id/id), 
                 data = pfactor_red, 
                 control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-thick_b56i <- as.data.frame(c(summary(thick56)$coefficients[14,1]))
-thick_se56i <- as.data.frame(c(summary(thick56)$coefficients[14,2]))
-thick_p56i <- as.data.frame(c(summary(thick56)$coefficients[14,5]))
-thick_b56s <- as.data.frame(c(summary(thick56)$coefficients[16,1]))
-thick_se56s <- as.data.frame(c(summary(thick56)$coefficients[16,2]))
-thick_p56s <- as.data.frame(c(summary(thick56)$coefficients[16,5]))
+thick_b56s <- as.data.frame(c(summary(thick56)$coefficients[12,1]))
+thick_se56s <- as.data.frame(c(summary(thick56)$coefficients[12,2]))
+thick_p56s <- as.data.frame(c(summary(thick56)$coefficients[12,5]))
 
-thick57 <- lmer(scaleint ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+thick57 <- lmer(scaleint ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                   site_precnrh_thick_cent + scale(subj_precnrh_thick) + site_precnrh_thick_cent*wave + scale(subj_precnrh_thick)*wave +
                   (1 + wave|site_id/id), 
                 data = pfactor_red, 
                 control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-thick_b57i <- as.data.frame(c(summary(thick57)$coefficients[14,1]))
-thick_se57i <- as.data.frame(c(summary(thick57)$coefficients[14,2]))
-thick_p57i <- as.data.frame(c(summary(thick57)$coefficients[14,5]))
-thick_b57s <- as.data.frame(c(summary(thick57)$coefficients[16,1]))
-thick_se57s <- as.data.frame(c(summary(thick57)$coefficients[16,2]))
-thick_p57s <- as.data.frame(c(summary(thick57)$coefficients[16,5]))
+thick_b57s <- as.data.frame(c(summary(thick57)$coefficients[12,1]))
+thick_se57s <- as.data.frame(c(summary(thick57)$coefficients[12,2]))
+thick_p57s <- as.data.frame(c(summary(thick57)$coefficients[12,5]))
 
-thick58 <- lmer(scaleint ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+thick58 <- lmer(scaleint ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                   site_pcrh_thick_cent + scale(subj_pcrh_thick) + site_pcrh_thick_cent*wave + scale(subj_pcrh_thick)*wave +
                   (1 + wave|site_id/id), 
                 data = pfactor_red, 
                 control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-thick_b58i <- as.data.frame(c(summary(thick58)$coefficients[14,1]))
-thick_se58i <- as.data.frame(c(summary(thick58)$coefficients[14,2]))
-thick_p58i <- as.data.frame(c(summary(thick58)$coefficients[14,5]))
-thick_b58s <- as.data.frame(c(summary(thick58)$coefficients[16,1]))
-thick_se58s <- as.data.frame(c(summary(thick58)$coefficients[16,2]))
-thick_p58s <- as.data.frame(c(summary(thick58)$coefficients[16,5]))
+thick_b58s <- as.data.frame(c(summary(thick58)$coefficients[12,1]))
+thick_se58s <- as.data.frame(c(summary(thick58)$coefficients[12,2]))
+thick_p58s <- as.data.frame(c(summary(thick58)$coefficients[12,5]))
 
-thick59 <- lmer(scaleint ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+thick59 <- lmer(scaleint ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                   site_rracaterh_thick_cent + scale(subj_rracaterh_thick) + site_rracaterh_thick_cent*wave + scale(subj_rracaterh_thick)*wave +
                   (1 + wave|site_id/id), 
                 data = pfactor_red, 
                 control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-thick_b59i <- as.data.frame(c(summary(thick59)$coefficients[14,1]))
-thick_se59i <- as.data.frame(c(summary(thick59)$coefficients[14,2]))
-thick_p59i <- as.data.frame(c(summary(thick59)$coefficients[14,5]))
-thick_b59s <- as.data.frame(c(summary(thick59)$coefficients[16,1]))
-thick_se59s <- as.data.frame(c(summary(thick59)$coefficients[16,2]))
-thick_p59s <- as.data.frame(c(summary(thick59)$coefficients[16,5]))
+thick_b59s <- as.data.frame(c(summary(thick59)$coefficients[12,1]))
+thick_se59s <- as.data.frame(c(summary(thick59)$coefficients[12,2]))
+thick_p59s <- as.data.frame(c(summary(thick59)$coefficients[12,5]))
 
-thick60 <- lmer(scaleint ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+thick60 <- lmer(scaleint ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                   site_rrmdfrrh_thick_cent + scale(subj_rrmdfrrh_thick) + site_rrmdfrrh_thick_cent*wave + scale(subj_rrmdfrrh_thick)*wave +
                   (1 + wave|site_id/id), 
                 data = pfactor_red, 
                 control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-thick_b60i <- as.data.frame(c(summary(thick60)$coefficients[14,1]))
-thick_se60i <- as.data.frame(c(summary(thick60)$coefficients[14,2]))
-thick_p60i <- as.data.frame(c(summary(thick60)$coefficients[14,5]))
-thick_b60s <- as.data.frame(c(summary(thick60)$coefficients[16,1]))
-thick_se60s <- as.data.frame(c(summary(thick60)$coefficients[16,2]))
-thick_p60s <- as.data.frame(c(summary(thick60)$coefficients[16,5]))
+thick_b60s <- as.data.frame(c(summary(thick60)$coefficients[12,1]))
+thick_se60s <- as.data.frame(c(summary(thick60)$coefficients[12,2]))
+thick_p60s <- as.data.frame(c(summary(thick60)$coefficients[12,5]))
 
-thick61 <- lmer(scaleint ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+thick61 <- lmer(scaleint ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                   site_sufrrh_thick_cent + scale(subj_sufrrh_thick) + site_sufrrh_thick_cent*wave + scale(subj_sufrrh_thick)*wave +
                   (1 + wave|site_id/id), 
                 data = pfactor_red, 
                 control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-thick_b61i <- as.data.frame(c(summary(thick61)$coefficients[14,1]))
-thick_se61i <- as.data.frame(c(summary(thick61)$coefficients[14,2]))
-thick_p61i <- as.data.frame(c(summary(thick61)$coefficients[14,5]))
-thick_b61s <- as.data.frame(c(summary(thick61)$coefficients[16,1]))
-thick_se61s <- as.data.frame(c(summary(thick61)$coefficients[16,2]))
-thick_p61s <- as.data.frame(c(summary(thick61)$coefficients[16,5]))
+thick_b61s <- as.data.frame(c(summary(thick61)$coefficients[12,1]))
+thick_se61s <- as.data.frame(c(summary(thick61)$coefficients[12,2]))
+thick_p61s <- as.data.frame(c(summary(thick61)$coefficients[12,5]))
 
-thick62 <- lmer(scaleint ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+thick62 <- lmer(scaleint ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                   site_suplrh_thick_cent + scale(subj_suplrh_thick) + site_suplrh_thick_cent*wave + scale(subj_suplrh_thick)*wave +
                   (1 + wave|site_id/id), 
                 data = pfactor_red, 
                 control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-thick_b62i <- as.data.frame(c(summary(thick62)$coefficients[14,1]))
-thick_se62i <- as.data.frame(c(summary(thick62)$coefficients[14,2]))
-thick_p62i <- as.data.frame(c(summary(thick62)$coefficients[14,5]))
-thick_b62s <- as.data.frame(c(summary(thick62)$coefficients[16,1]))
-thick_se62s <- as.data.frame(c(summary(thick62)$coefficients[16,2]))
-thick_p62s <- as.data.frame(c(summary(thick62)$coefficients[16,5]))
+thick_b62s <- as.data.frame(c(summary(thick62)$coefficients[12,1]))
+thick_se62s <- as.data.frame(c(summary(thick62)$coefficients[12,2]))
+thick_p62s <- as.data.frame(c(summary(thick62)$coefficients[12,5]))
 
-thick63 <- lmer(scaleint ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+thick63 <- lmer(scaleint ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                   site_sutmrh_thick_cent + scale(subj_sutmrh_thick) + site_sutmrh_thick_cent*wave + scale(subj_sutmrh_thick)*wave +
                   (1 + wave|site_id/id), 
                 data = pfactor_red, 
                 control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-thick_b63i <- as.data.frame(c(summary(thick63)$coefficients[14,1]))
-thick_se63i <- as.data.frame(c(summary(thick63)$coefficients[14,2]))
-thick_p63i <- as.data.frame(c(summary(thick63)$coefficients[14,5]))
-thick_b63s <- as.data.frame(c(summary(thick63)$coefficients[16,1]))
-thick_se63s <- as.data.frame(c(summary(thick63)$coefficients[16,2]))
-thick_p63s <- as.data.frame(c(summary(thick63)$coefficients[16,5]))
+thick_b63s <- as.data.frame(c(summary(thick63)$coefficients[12,1]))
+thick_se63s <- as.data.frame(c(summary(thick63)$coefficients[12,2]))
+thick_p63s <- as.data.frame(c(summary(thick63)$coefficients[12,5]))
 
-thick64 <- lmer(scaleint ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+thick64 <- lmer(scaleint ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                   site_smrh_thick_cent + scale(subj_smrh_thick) + site_smrh_thick_cent*wave + scale(subj_smrh_thick)*wave +
                   (1 + wave|site_id/id), 
                 data = pfactor_red, 
                 control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-thick_b64i <- as.data.frame(c(summary(thick64)$coefficients[14,1]))
-thick_se64i <- as.data.frame(c(summary(thick64)$coefficients[14,2]))
-thick_p64i <- as.data.frame(c(summary(thick64)$coefficients[14,5]))
-thick_b64s <- as.data.frame(c(summary(thick64)$coefficients[16,1]))
-thick_se64s <- as.data.frame(c(summary(thick64)$coefficients[16,2]))
-thick_p64s <- as.data.frame(c(summary(thick64)$coefficients[16,5]))
+thick_b64s <- as.data.frame(c(summary(thick64)$coefficients[12,1]))
+thick_se64s <- as.data.frame(c(summary(thick64)$coefficients[12,2]))
+thick_p64s <- as.data.frame(c(summary(thick64)$coefficients[12,5]))
 
-thick65 <- lmer(scaleint ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+thick65 <- lmer(scaleint ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                   site_frpolerh_thick_cent + scale(subj_frpolerh_thick) + site_frpolerh_thick_cent*wave + scale(subj_frpolerh_thick)*wave +
                   (1 + wave|site_id/id), 
                 data = pfactor_red, 
                 control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-thick_b65i <- as.data.frame(c(summary(thick65)$coefficients[14,1]))
-thick_se65i <- as.data.frame(c(summary(thick65)$coefficients[14,2]))
-thick_p65i <- as.data.frame(c(summary(thick65)$coefficients[14,5]))
-thick_b65s <- as.data.frame(c(summary(thick65)$coefficients[16,1]))
-thick_se65s <- as.data.frame(c(summary(thick65)$coefficients[16,2]))
-thick_p65s <- as.data.frame(c(summary(thick65)$coefficients[16,5]))
+thick_b65s <- as.data.frame(c(summary(thick65)$coefficients[12,1]))
+thick_se65s <- as.data.frame(c(summary(thick65)$coefficients[12,2]))
+thick_p65s <- as.data.frame(c(summary(thick65)$coefficients[12,5]))
 
-thick66 <- lmer(scaleint ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+thick66 <- lmer(scaleint ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                   site_tmpolerh_thick_cent + scale(subj_tmpolerh_thick) + site_tmpolerh_thick_cent*wave + scale(subj_tmpolerh_thick)*wave +
                   (1 + wave|site_id/id), 
                 data = pfactor_red, 
                 control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-thick_b66i <- as.data.frame(c(summary(thick66)$coefficients[14,1]))
-thick_se66i <- as.data.frame(c(summary(thick66)$coefficients[14,2]))
-thick_p66i <- as.data.frame(c(summary(thick66)$coefficients[14,5]))
-thick_b66s <- as.data.frame(c(summary(thick66)$coefficients[16,1]))
-thick_se66s <- as.data.frame(c(summary(thick66)$coefficients[16,2]))
-thick_p66s <- as.data.frame(c(summary(thick66)$coefficients[16,5]))
+thick_b66s <- as.data.frame(c(summary(thick66)$coefficients[12,1]))
+thick_se66s <- as.data.frame(c(summary(thick66)$coefficients[12,2]))
+thick_p66s <- as.data.frame(c(summary(thick66)$coefficients[12,5]))
 
-thick67 <- lmer(scaleint ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+thick67 <- lmer(scaleint ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                   site_trvtmrh_thick_cent + scale(subj_trvtmrh_thick) + site_trvtmrh_thick_cent*wave + scale(subj_trvtmrh_thick)*wave +
                   (1 + wave|site_id/id), 
                 data = pfactor_red, 
                 control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-thick_b67i <- as.data.frame(c(summary(thick67)$coefficients[14,1]))
-thick_se67i <- as.data.frame(c(summary(thick67)$coefficients[14,2]))
-thick_p67i <- as.data.frame(c(summary(thick67)$coefficients[14,5]))
-thick_b67s <- as.data.frame(c(summary(thick67)$coefficients[16,1]))
-thick_se67s <- as.data.frame(c(summary(thick67)$coefficients[16,2]))
-thick_p67s <- as.data.frame(c(summary(thick67)$coefficients[16,5]))
+thick_b67s <- as.data.frame(c(summary(thick67)$coefficients[12,1]))
+thick_se67s <- as.data.frame(c(summary(thick67)$coefficients[12,2]))
+thick_p67s <- as.data.frame(c(summary(thick67)$coefficients[12,5]))
 
-thick68 <- lmer(scaleint ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
+thick68 <- lmer(scaleint ~ wave + sex + age + achieva + discovery + ingenia + prisma +  
                   site_insularh_thick_cent + scale(subj_insularh_thick) + site_insularh_thick_cent*wave + scale(subj_insularh_thick)*wave +
                   (1 + wave|site_id/id), 
                 data = pfactor_red, 
                 control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-thick_b68i <- as.data.frame(c(summary(thick68)$coefficients[14,1]))
-thick_se68i <- as.data.frame(c(summary(thick68)$coefficients[14,2]))
-thick_p68i <- as.data.frame(c(summary(thick68)$coefficients[14,5]))
-thick_b68s <- as.data.frame(c(summary(thick68)$coefficients[16,1]))
-thick_se68s <- as.data.frame(c(summary(thick68)$coefficients[16,2]))
-thick_p68s <- as.data.frame(c(summary(thick68)$coefficients[16,5]))
+thick_b68s <- as.data.frame(c(summary(thick68)$coefficients[12,1]))
+thick_se68s <- as.data.frame(c(summary(thick68)$coefficients[12,2]))
+thick_p68s <- as.data.frame(c(summary(thick68)$coefficients[12,5]))
 
 #create data frame with all parcel-wise cortical thickume st. estimates, SEs, and p-values
 thick_parcel <- data.frame(x=c("thick"))
-
-newthickbi <- c(thick_b1i,thick_b2i,thick_b3i,thick_b4i,thick_b5i,thick_b6i,thick_b7i,thick_b8i,thick_b9i,thick_b10i,thick_b11i,thick_b12i,thick_b13i,thick_b14i,thick_b15i,
-                thick_b16i,thick_b17i,thick_b18i,thick_b19i,thick_b20i,thick_b21i,thick_b22i,thick_b23i,thick_b24i,thick_b25i,thick_b26i,thick_b27i,thick_b28i,thick_b29i,
-                thick_b30i,thick_b31i,thick_b32i,thick_b33i,thick_b34i,thick_b35i,thick_b36i,thick_b37i,thick_b38i,thick_b39i,thick_b40i,thick_b41i,thick_b42i,thick_b43i,
-                thick_b44i,thick_b45i,thick_b46i,thick_b47i,thick_b48i,thick_b49i,thick_b50i,thick_b51i,thick_b52i,thick_b53i,thick_b54i,thick_b55i,thick_b56i,thick_b57i,
-                thick_b58i,thick_b59i,thick_b60i,thick_b61i,thick_b62i,thick_b63i,thick_b64i,thick_b65i,thick_b66i,thick_b67i,thick_b68i)
-thick_parcel <- cbind(thick_parcel,newthickbi)
 
 newthickbs <- c(thick_b1s,thick_b2s,thick_b3s,thick_b4s,thick_b5s,thick_b6s,thick_b7s,thick_b8s,thick_b9s,thick_b10s,thick_b11s,thick_b12s,thick_b13s,thick_b14s,thick_b15s,
                 thick_b16s,thick_b17s,thick_b18s,thick_b19s,thick_b20s,thick_b21s,thick_b22s,thick_b23s,thick_b24s,thick_b25s,thick_b26s,thick_b27s,thick_b28s,thick_b29s,
@@ -4250,14 +3976,6 @@ newthickbs <- c(thick_b1s,thick_b2s,thick_b3s,thick_b4s,thick_b5s,thick_b6s,thic
                 thick_b44s,thick_b45s,thick_b46s,thick_b47s,thick_b48s,thick_b49s,thick_b50s,thick_b51s,thick_b52s,thick_b53s,thick_b54s,thick_b55s,thick_b56s,thick_b57s,
                 thick_b58s,thick_b59s,thick_b60s,thick_b61s,thick_b62s,thick_b63s,thick_b64s,thick_b65s,thick_b66s,thick_b67s,thick_b68s)
 thick_parcel <- cbind(thick_parcel,newthickbs)
-
-newthicksei <- c(thick_se1i,thick_se2i,thick_se3i,thick_se4i,thick_se5i,thick_se6i,thick_se7i,thick_se8i,thick_se9i,thick_se10i,thick_se11i,thick_se12i,thick_se13i,
-                 thick_se14i,thick_se15i,thick_se16i,thick_se17i,thick_se18i,thick_se19i,thick_se20i,thick_se21i,thick_se22i,thick_se23i,thick_se24i,thick_se25i,
-                 thick_se26i,thick_se27i,thick_se28i,thick_se29i,thick_se30i,thick_se31i,thick_se32i,thick_se33i,thick_se34i,thick_se35i,thick_se36i,thick_se37i,
-                 thick_se38i,thick_se39i,thick_se40i,thick_se41i,thick_se42i,thick_se43i,thick_se44i,thick_se45i,thick_se46i,thick_se47i,thick_se48i,thick_se49i,
-                 thick_se50i,thick_se51i,thick_se52i,thick_se53i,thick_se54i,thick_se55i,thick_se56i,thick_se57i,thick_se58i,thick_se59i,thick_se60i,thick_se61i,
-                 thick_se62i,thick_se63i,thick_se64i,thick_se65i,thick_se66i,thick_se67i,thick_se68i)
-thick_parcel <- cbind(thick_parcel,newthicksei)
 
 newthickses <- c(thick_se1s,thick_se2s,thick_se3s,thick_se4s,thick_se5s,thick_se6s,thick_se7s,thick_se8s,thick_se9s,thick_se10s,thick_se11s,thick_se12s,thick_se13s,
                  thick_se14s,thick_se15s,thick_se16s,thick_se17s,thick_se18s,thick_se19s,thick_se20s,thick_se21s,thick_se22s,thick_se23s,thick_se24s,thick_se25s,
@@ -4267,13 +3985,6 @@ newthickses <- c(thick_se1s,thick_se2s,thick_se3s,thick_se4s,thick_se5s,thick_se
                  thick_se62s,thick_se63s,thick_se64s,thick_se65s,thick_se66s,thick_se67s,thick_se68s)
 thick_parcel <- cbind(thick_parcel,newthickses)
 
-newthickpi <- c(thick_p1i,thick_p2i,thick_p3i,thick_p4i,thick_p5i,thick_p6i,thick_p7i,thick_p8i,thick_p9i,thick_p10i,thick_p11i,thick_p12i,thick_p13i,thick_p14i,thick_p15i,
-                thick_p16i,thick_p17i,thick_p18i,thick_p19i,thick_p20i,thick_p21i,thick_p22i,thick_p23i,thick_p24i,thick_p25i,thick_p26i,thick_p27i,thick_p28i,thick_p29i,
-                thick_p30i,thick_p31i,thick_p32i,thick_p33i,thick_p34i,thick_p35i,thick_p36i,thick_p37i,thick_p38i,thick_p39i,thick_p40i,thick_p41i,thick_p42i,thick_p43i,
-                thick_p44i,thick_p45i,thick_p46i,thick_p47i,thick_p48i,thick_p49i,thick_p50i,thick_p51i,thick_p52i,thick_p53i,thick_p54i,thick_p55i,thick_p56i,thick_p57i,
-                thick_p58i,thick_p59i,thick_p60i,thick_p61i,thick_p62i,thick_p63i,thick_p64i,thick_p65i,thick_p66i,thick_p67i,thick_p68i)
-thick_parcel <- cbind(thick_parcel,newthickpi)
-
 newthickps <- c(thick_p1s,thick_p2s,thick_p3s,thick_p4s,thick_p5s,thick_p6s,thick_p7s,thick_p8s,thick_p9s,thick_p10s,thick_p11s,thick_p12s,thick_p13s,thick_p14s,thick_p15s,
                 thick_p16s,thick_p17s,thick_p18s,thick_p19s,thick_p20s,thick_p21s,thick_p22s,thick_p23s,thick_p24s,thick_p25s,thick_p26s,thick_p27s,thick_p28s,thick_p29s,
                 thick_p30s,thick_p31s,thick_p32s,thick_p33s,thick_p34s,thick_p35s,thick_p36s,thick_p37s,thick_p38s,thick_p39s,thick_p40s,thick_p41s,thick_p42s,thick_p43s,
@@ -4281,19 +3992,7 @@ newthickps <- c(thick_p1s,thick_p2s,thick_p3s,thick_p4s,thick_p5s,thick_p6s,thic
                 thick_p58s,thick_p59s,thick_p60s,thick_p61s,thick_p62s,thick_p63s,thick_p64s,thick_p65s,thick_p66s,thick_p67s,thick_p68s)
 thick_parcel <- cbind(thick_parcel,newthickps)
 
-names(thick_parcel) <- c('thick','banksstslh_thick_bi','cdacatelh_thick_bi','cdmdfrlh_thick_bi','cuneuslh_thick_bi','ehinallh_thick_bi','fusiformlh_thick_bi',
-                         'ifpllh_thick_bi','iftmlh_thick_bi','ihcatelh_thick_bi','locclh_thick_bi','lobfrlh_thick_bi','linguallh_thick_bi',
-                         'mobfrlh_thick_bi','mdtmlh_thick_bi','parahpallh_thick_bi','paracnlh_thick_bi','parsopclh_thick_bi','parsobislh_thick_bi',
-                         'parstgrislh_thick_bi','pericclh_thick_bi','postcnlh_thick_bi','ptcatelh_thick_bi','precnlh_thick_bi','pclh_thick_bi',
-                         'rracatelh_thick_bi','rrmdfrlh_thick_bi','sufrlh_thick_bi','supllh_thick_bi','sutmlh_thick_bi','smlh_thick_bi','frpolelh_thick_bi',
-                         'tmpolelh_thick_bi','trvtmlh_thick_bi','insulalh_thick_bi','banksstsrh_thick_bi','cdacaterh_thick_bi','cdmdfrrh_thick_bi',
-                         'cuneusrh_thick_bi','ehinalrh_thick_bi','fusiformrh_thick_bi','ifplrh_thick_bi','iftmrh_thick_bi','ihcaterh_thick_bi',
-                         'loccrh_thick_bi','lobfrrh_thick_bi','lingualrh_thick_bi','mobfrrh_thick_bi','mdtmrh_thick_bi','parahpalrh_thick_bi',
-                         'paracnrh_thick_bi','parsopcrh_thick_bi','parsobisrh_thick_bi','parstgrisrh_thick_bi','periccrh_thick_bi',
-                         'postcnrh_thick_bi','ptcaterh_thick_bi','precnrh_thick_bi','pcrh_thick_bi','rracaterh_thick_bi','rrmdfrrh_thick_bi',
-                         'sufrrh_thick_bi','suplrh_thick_bi','sutmrh_thick_bi','smrh_thick_bi','frpolerh_thick_bi',
-                         'tmpolerh_thick_bi','trvtmrh_thick_bi','insularh_thick_bi',
-                         'banksstslh_thick_bs','cdacatelh_thick_bs','cdmdfrlh_thick_bs','cuneuslh_thick_bs','ehinallh_thick_bs','fusiformlh_thick_bs',
+names(thick_parcel) <- c('thick','banksstslh_thick_bs','cdacatelh_thick_bs','cdmdfrlh_thick_bs','cuneuslh_thick_bs','ehinallh_thick_bs','fusiformlh_thick_bs',
                          'ifpllh_thick_bs','iftmlh_thick_bs','ihcatelh_thick_bs','locclh_thick_bs','lobfrlh_thick_bs','linguallh_thick_bs',
                          'mobfrlh_thick_bs','mdtmlh_thick_bs','parahpallh_thick_bs','paracnlh_thick_bs','parsopclh_thick_bs','parsobislh_thick_bs',
                          'parstgrislh_thick_bs','pericclh_thick_bs','postcnlh_thick_bs','ptcatelh_thick_bs','precnlh_thick_bs','pclh_thick_bs',
@@ -4305,19 +4004,6 @@ names(thick_parcel) <- c('thick','banksstslh_thick_bi','cdacatelh_thick_bi','cdm
                          'postcnrh_thick_bs','ptcaterh_thick_bs','precnrh_thick_bs','pcrh_thick_bs','rracaterh_thick_bs','rrmdfrrh_thick_bs',
                          'sufrrh_thick_bs','suplrh_thick_bs','sutmrh_thick_bs','smrh_thick_bs','frpolerh_thick_bs',
                          'tmpolerh_thick_bs','trvtmrh_thick_bs','insularh_thick_bs',
-                         'banksstslh_thick_sei','cdacatelh_thick_sei','cdmdfrlh_thick_sei','cuneuslh_thick_sei','ehinallh_thick_sei','fusiformlh_thick_sei',
-                         'ifpllh_thick_sei','iftmlh_thick_sei','ihcatelh_thick_sei','locclh_thick_sei','lobfrlh_thick_sei','linguallh_thick_sei',
-                         'mobfrlh_thick_sei','mdtmlh_thick_sei','parahpallh_thick_sei','paracnlh_thick_sei','parsopclh_thick_sei',
-                         'parsobislh_thick_sei','parstgrislh_thick_sei','pericclh_thick_sei','postcnlh_thick_sei','ptcatelh_thick_sei',
-                         'precnlh_thick_sei','pclh_thick_sei','rracatelh_thick_sei','rrmdfrlh_thick_sei','sufrlh_thick_sei','supllh_thick_sei',
-                         'sutmlh_thick_sei','smlh_thick_sei','frpolelh_thick_sei','tmpolelh_thick_sei','trvtmlh_thick_sei','insulalh_thick_sei',
-                         'banksstsrh_thick_sei','cdacaterh_thick_sei','cdmdfrrh_thick_sei','cuneusrh_thick_sei','ehinalrh_thick_sei',
-                         'fusiformrh_thick_sei','ifplrh_thick_sei','iftmrh_thick_sei','ihcaterh_thick_sei','loccrh_thick_sei','lobfrrh_thick_sei',
-                         'lingualrh_thick_sei','mobfrrh_thick_sei','mdtmrh_thick_sei','parahpalrh_thick_sei','paracnrh_thick_sei',
-                         'parsopcrh_thick_sei','parsobisrh_thick_sei','parstgrisrh_thick_sei','periccrh_thick_sei','postcnrh_thick_sei',
-                         'ptcaterh_thick_sei','precnrh_thick_sei','pcrh_thick_sei','rracaterh_thick_sei','rrmdfrrh_thick_sei',
-                         'sufrrh_thick_sei','suplrh_thick_sei','sutmrh_thick_sei','smrh_thick_sei','frpolerh_thick_sei',
-                         'tmpolerh_thick_sei','trvtmrh_thick_sei','insularh_thick_sei',
                          'banksstslh_thick_ses','cdacatelh_thick_ses','cdmdfrlh_thick_ses','cuneuslh_thick_ses','ehinallh_thick_ses','fusiformlh_thick_ses',
                          'ifpllh_thick_ses','iftmlh_thick_ses','ihcatelh_thick_ses','locclh_thick_ses','lobfrlh_thick_ses','linguallh_thick_ses',
                          'mobfrlh_thick_ses','mdtmlh_thick_ses','parahpallh_thick_ses','paracnlh_thick_ses','parsopclh_thick_ses',
@@ -4331,18 +4017,6 @@ names(thick_parcel) <- c('thick','banksstslh_thick_bi','cdacatelh_thick_bi','cdm
                          'ptcaterh_thick_ses','precnrh_thick_ses','pcrh_thick_ses','rracaterh_thick_ses','rrmdfrrh_thick_ses',
                          'sufrrh_thick_ses','suplrh_thick_ses','sutmrh_thick_ses','smrh_thick_ses','frpolerh_thick_ses',
                          'tmpolerh_thick_ses','trvtmrh_thick_ses','insularh_thick_ses',
-                         'banksstslh_thick_pi','cdacatelh_thick_pi','cdmdfrlh_thick_pi','cuneuslh_thick_pi','ehinallh_thick_pi','fusiformlh_thick_pi','ifpllh_thick_pi','iftmlh_thick_pi',
-                         'ihcatelh_thick_pi','locclh_thick_pi','lobfrlh_thick_pi','linguallh_thick_pi','mobfrlh_thick_pi','mdtmlh_thick_pi',
-                         'parahpallh_thick_pi','paracnlh_thick_pi','parsopclh_thick_pi','parsobislh_thick_pi','parstgrislh_thick_pi',
-                         'pericclh_thick_pi','postcnlh_thick_pi','ptcatelh_thick_pi','precnlh_thick_pi','pclh_thick_pi','rracatelh_thick_pi',
-                         'rrmdfrlh_thick_pi','sufrlh_thick_pi','supllh_thick_pi','sutmlh_thick_pi','smlh_thick_pi','frpolelh_thick_pi',
-                         'tmpolelh_thick_pi','trvtmlh_thick_pi','insulalh_thick_pi','banksstsrh_thick_pi','cdacaterh_thick_pi','cdmdfrrh_thick_pi',
-                         'cuneusrh_thick_pi','ehinalrh_thick_pi','fusiformrh_thick_pi','ifplrh_thick_pi','iftmrh_thick_pi','ihcaterh_thick_pi',
-                         'loccrh_thick_pi','lobfrrh_thick_pi','lingualrh_thick_pi','mobfrrh_thick_pi','mdtmrh_thick_pi','parahpalrh_thick_pi',
-                         'paracnrh_thick_pi','parsopcrh_thick_pi','parsobisrh_thick_pi','parstgrisrh_thick_pi','periccrh_thick_pi',
-                         'postcnrh_thick_pi','ptcaterh_thick_pi','precnrh_thick_pi','pcrh_thick_pi','rracaterh_thick_pi','rrmdfrrh_thick_pi',
-                         'sufrrh_thick_pi','suplrh_thick_pi','sutmrh_thick_pi','smrh_thick_pi','frpolerh_thick_pi',
-                         'tmpolerh_thick_pi','trvtmrh_thick_pi','insularh_thick_pi',
                          'banksstslh_thick_ps','cdacatelh_thick_ps','cdmdfrlh_thick_ps','cuneuslh_thick_ps','ehinallh_thick_ps','fusiformlh_thick_ps','ifpllh_thick_ps','iftmlh_thick_ps',
                          'ihcatelh_thick_ps','locclh_thick_ps','lobfrlh_thick_ps','linguallh_thick_ps','mobfrlh_thick_ps','mdtmlh_thick_ps',
                          'parahpallh_thick_ps','paracnlh_thick_ps','parsopclh_thick_ps','parsobislh_thick_ps','parstgrislh_thick_ps',
@@ -4495,340 +4169,16 @@ thick_parcel$ci_upper_trvtmrh_thicks <- thick_parcel$trvtmrh_thick_bs + 1.96*thi
 thick_parcel$ci_lower_insularh_thicks <- thick_parcel$insularh_thick_bs - 1.96*thick_parcel$insularh_thick_ses 
 thick_parcel$ci_upper_insularh_thicks <- thick_parcel$insularh_thick_bs + 1.96*thick_parcel$insularh_thick_ses
 
-write.csv(thick_parcel, "Parcel-Wise Cortical Thickness Standardized_FINAL.csv") #write csv file
+write.csv(thick_parcel, "Parcel-Wise Cortical Thickness Standardized_FINAL_SuppTable8.csv") #write csv file
 
-interact_plot(thick55, pred = wave, modx = subj_postcnrh_thick, 
-              modx.values=c(-0.14,0,0.14),
-              x.label = "Wave", y.label = "INT Factor Scores")
-
-#Parcel-wise subcortical volume analyses
-
-sub1 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
-               site_crbcortexlh_vol_cent + scale(subj_crbcortexlh_vol) + site_crbcortexlh_vol_cent*wave + scale(subj_crbcortexlh_vol)*wave +
-               (1 + wave|site_id/id), 
-             data = pfactor_red, 
-             control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-sub_b1i <- as.data.frame(c(summary(sub1)$coefficients[14,1]))
-sub_se1i <- as.data.frame(c(summary(sub1)$coefficients[14,2]))
-sub_p1i <- as.data.frame(c(summary(sub1)$coefficients[14,5]))
-sub_b1s <- as.data.frame(c(summary(sub1)$coefficients[16,1]))
-sub_se1s <- as.data.frame(c(summary(sub1)$coefficients[16,2]))
-sub_p1s <- as.data.frame(c(summary(sub1)$coefficients[16,5]))
+#FDR correction
+pval_thick_parcel_fdr <- transform(newthickps, adj.p = p.adjust(as.matrix(newthickps),method = "BH"))
+sum(pval_thick_parcel_fdr$adj.p<0.05)
+write.csv(pval_thick_parcel_fdr, "FDR adjusted pvalues_thickness parcel analysis.csv")
 
 
-sub2 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
-               site_tplh_vol_cent + scale(subj_tplh_vol) + site_tplh_vol_cent*wave + scale(subj_tplh_vol)*wave +
-               (1 + wave|site_id/id), 
-             data = pfactor_red, 
-             control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-sub_b2i <- as.data.frame(c(summary(sub2)$coefficients[14,1]))
-sub_se2i <- as.data.frame(c(summary(sub2)$coefficients[14,2]))
-sub_p2i <- as.data.frame(c(summary(sub2)$coefficients[14,5]))
-sub_b2s <- as.data.frame(c(summary(sub2)$coefficients[16,1]))
-sub_se2s <- as.data.frame(c(summary(sub2)$coefficients[16,2]))
-sub_p2s <- as.data.frame(c(summary(sub2)$coefficients[16,5]))
-
-sub3 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
-               site_caudatelh_vol_cent + scale(subj_caudatelh_vol) + site_caudatelh_vol_cent*wave + scale(subj_caudatelh_vol)*wave +
-               (1 + wave|site_id/id), 
-             data = pfactor_red, 
-             control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-sub_b3i <- as.data.frame(c(summary(sub3)$coefficients[14,1]))
-sub_se3i <- as.data.frame(c(summary(sub3)$coefficients[14,2]))
-sub_p3i <- as.data.frame(c(summary(sub3)$coefficients[14,5]))
-sub_b3s <- as.data.frame(c(summary(sub3)$coefficients[16,1]))
-sub_se3s <- as.data.frame(c(summary(sub3)$coefficients[16,2]))
-sub_p3s <- as.data.frame(c(summary(sub3)$coefficients[16,5]))
-
-sub4 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
-               site_putamenlh_vol_cent + scale(subj_putamenlh_vol) + site_putamenlh_vol_cent*wave + scale(subj_putamenlh_vol)*wave +
-               (1 + wave|site_id/id), 
-             data = pfactor_red, 
-             control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-sub_b4i <- as.data.frame(c(summary(sub4)$coefficients[14,1]))
-sub_se4i <- as.data.frame(c(summary(sub4)$coefficients[14,2]))
-sub_p4i <- as.data.frame(c(summary(sub4)$coefficients[14,5]))
-sub_b4s <- as.data.frame(c(summary(sub4)$coefficients[16,1]))
-sub_se4s <- as.data.frame(c(summary(sub4)$coefficients[16,2]))
-sub_p4s <- as.data.frame(c(summary(sub4)$coefficients[16,5]))
-
-sub5 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
-               site_pallidumlh_vol_cent + scale(subj_pallidumlh_vol) + site_pallidumlh_vol_cent*wave + scale(subj_pallidumlh_vol)*wave +
-               (1 + wave|site_id/id), 
-             data = pfactor_red, 
-             control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-sub_b5i <- as.data.frame(c(summary(sub5)$coefficients[14,1]))
-sub_se5i <- as.data.frame(c(summary(sub5)$coefficients[14,2]))
-sub_p5i <- as.data.frame(c(summary(sub5)$coefficients[14,5]))
-sub_b5s <- as.data.frame(c(summary(sub5)$coefficients[16,1]))
-sub_se5s <- as.data.frame(c(summary(sub5)$coefficients[16,2]))
-sub_p5s <- as.data.frame(c(summary(sub5)$coefficients[16,5]))
-
-sub6 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
-               site_bstem_vol_cent + scale(subj_bstem_vol) + site_bstem_vol_cent*wave + scale(subj_bstem_vol)*wave +
-               (1 + wave|site_id/id), 
-             data = pfactor_red, 
-             control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-sub_b6i <- as.data.frame(c(summary(sub6)$coefficients[14,1]))
-sub_se6i <- as.data.frame(c(summary(sub6)$coefficients[14,2]))
-sub_p6i <- as.data.frame(c(summary(sub6)$coefficients[14,5]))
-sub_b6s <- as.data.frame(c(summary(sub6)$coefficients[16,1]))
-sub_se6s <- as.data.frame(c(summary(sub6)$coefficients[16,2]))
-sub_p6s <- as.data.frame(c(summary(sub6)$coefficients[16,5]))
-
-sub7 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
-               site_hpuslh_vol_cent + scale(subj_hpuslh_vol) + site_hpuslh_vol_cent*wave + scale(subj_hpuslh_vol)*wave +
-               (1 + wave|site_id/id), 
-             data = pfactor_red, 
-             control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-sub_b7i <- as.data.frame(c(summary(sub7)$coefficients[14,1]))
-sub_se7i <- as.data.frame(c(summary(sub7)$coefficients[14,2]))
-sub_p7i <- as.data.frame(c(summary(sub7)$coefficients[14,5]))
-sub_b7s <- as.data.frame(c(summary(sub7)$coefficients[16,1]))
-sub_se7s <- as.data.frame(c(summary(sub7)$coefficients[16,2]))
-sub_p7s <- as.data.frame(c(summary(sub7)$coefficients[16,5]))
-
-sub8 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
-               site_amygdalalh_vol_cent + scale(subj_amygdalalh_vol) + site_amygdalalh_vol_cent*wave + scale(subj_amygdalalh_vol)*wave +
-               (1 + wave|site_id/id), 
-             data = pfactor_red, 
-             control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-sub_b8i <- as.data.frame(c(summary(sub8)$coefficients[14,1]))
-sub_se8i <- as.data.frame(c(summary(sub8)$coefficients[14,2]))
-sub_p8i <- as.data.frame(c(summary(sub8)$coefficients[14,5]))
-sub_b8s <- as.data.frame(c(summary(sub8)$coefficients[16,1]))
-sub_se8s <- as.data.frame(c(summary(sub8)$coefficients[16,2]))
-sub_p8s <- as.data.frame(c(summary(sub8)$coefficients[16,5]))
-
-sub9 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
-               site_aal_vol_cent + scale(subj_aal_vol) + site_aal_vol_cent*wave + scale(subj_aal_vol)*wave +
-               (1 + wave|site_id/id), 
-             data = pfactor_red, 
-             control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-sub_b9i <- as.data.frame(c(summary(sub9)$coefficients[14,1]))
-sub_se9i <- as.data.frame(c(summary(sub9)$coefficients[14,2]))
-sub_p9i <- as.data.frame(c(summary(sub9)$coefficients[14,5]))
-sub_b9s <- as.data.frame(c(summary(sub9)$coefficients[16,1]))
-sub_se9s <- as.data.frame(c(summary(sub9)$coefficients[16,2]))
-sub_p9s <- as.data.frame(c(summary(sub9)$coefficients[16,5]))
-
-sub10 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
-                site_vedclh_vol_cent + scale(subj_vedclh_vol) + site_vedclh_vol_cent*wave + scale(subj_vedclh_vol)*wave +
-                (1 + wave|site_id/id), 
-              data = pfactor_red, 
-              control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-sub_b10i <- as.data.frame(c(summary(sub10)$coefficients[14,1]))
-sub_se10i <- as.data.frame(c(summary(sub10)$coefficients[14,2]))
-sub_p10i <- as.data.frame(c(summary(sub10)$coefficients[14,5]))
-sub_b10s <- as.data.frame(c(summary(sub10)$coefficients[16,1]))
-sub_se10s <- as.data.frame(c(summary(sub10)$coefficients[16,2]))
-sub_p10s <- as.data.frame(c(summary(sub10)$coefficients[16,5]))
-
-sub11 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
-                site_crbcortexrh_vol_cent + scale(subj_crbcortexrh_vol) + site_crbcortexrh_vol_cent*wave + scale(subj_crbcortexrh_vol)*wave +
-                (1 + wave|site_id/id), 
-              data = pfactor_red, 
-              control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-sub_b11i <- as.data.frame(c(summary(sub11)$coefficients[14,1]))
-sub_se11i <- as.data.frame(c(summary(sub11)$coefficients[14,2]))
-sub_p11i <- as.data.frame(c(summary(sub11)$coefficients[14,5]))
-sub_b11s <- as.data.frame(c(summary(sub11)$coefficients[16,1]))
-sub_se11s <- as.data.frame(c(summary(sub11)$coefficients[16,2]))
-sub_p11s <- as.data.frame(c(summary(sub11)$coefficients[16,5]))
-
-sub12 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
-                site_tprh_vol_cent + scale(subj_tprh_vol) + site_tprh_vol_cent*wave + scale(subj_tprh_vol)*wave +
-                (1 + wave|site_id/id), 
-              data = pfactor_red, 
-              control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-sub_b12i <- as.data.frame(c(summary(sub12)$coefficients[14,1]))
-sub_se12i <- as.data.frame(c(summary(sub12)$coefficients[14,2]))
-sub_p12i <- as.data.frame(c(summary(sub12)$coefficients[14,5]))
-sub_b12s <- as.data.frame(c(summary(sub12)$coefficients[16,1]))
-sub_se12s <- as.data.frame(c(summary(sub12)$coefficients[16,2]))
-sub_p12s <- as.data.frame(c(summary(sub12)$coefficients[16,5]))
-
-sub13 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
-                site_caudaterh_vol_cent + scale(subj_caudaterh_vol) + site_caudaterh_vol_cent*wave + scale(subj_caudaterh_vol)*wave +
-                (1 + wave|site_id/id), 
-              data = pfactor_red, 
-              control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-sub_b13i <- as.data.frame(c(summary(sub13)$coefficients[14,1]))
-sub_se13i <- as.data.frame(c(summary(sub13)$coefficients[14,2]))
-sub_p13i <- as.data.frame(c(summary(sub13)$coefficients[14,5]))
-sub_b13s <- as.data.frame(c(summary(sub13)$coefficients[16,1]))
-sub_se13s <- as.data.frame(c(summary(sub13)$coefficients[16,2]))
-sub_p13s <- as.data.frame(c(summary(sub13)$coefficients[16,5]))
-
-sub14 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
-                site_putamenrh_vol_cent + scale(subj_putamenrh_vol) + site_putamenrh_vol_cent*wave + scale(subj_putamenrh_vol)*wave +
-                (1 + wave|site_id/id), 
-              data = pfactor_red, 
-              control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-sub_b14i <- as.data.frame(c(summary(sub14)$coefficients[14,1]))
-sub_se14i <- as.data.frame(c(summary(sub14)$coefficients[14,2]))
-sub_p14i <- as.data.frame(c(summary(sub14)$coefficients[14,5]))
-sub_b14s <- as.data.frame(c(summary(sub14)$coefficients[16,1]))
-sub_se14s <- as.data.frame(c(summary(sub14)$coefficients[16,2]))
-sub_p14s <- as.data.frame(c(summary(sub14)$coefficients[16,5]))
-
-sub15 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
-                site_pallidumrh_vol_cent + scale(subj_pallidumrh_vol) + site_pallidumrh_vol_cent*wave + scale(subj_pallidumrh_vol)*wave +
-                (1 + wave|site_id/id), 
-              data = pfactor_red, 
-              control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-sub_b15i <- as.data.frame(c(summary(sub15)$coefficients[14,1]))
-sub_se15i <- as.data.frame(c(summary(sub15)$coefficients[14,2]))
-sub_p15i <- as.data.frame(c(summary(sub15)$coefficients[14,5]))
-sub_b15s <- as.data.frame(c(summary(sub15)$coefficients[16,1]))
-sub_se15s <- as.data.frame(c(summary(sub15)$coefficients[16,2]))
-sub_p15s <- as.data.frame(c(summary(sub15)$coefficients[16,5]))
-
-sub16 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
-                site_hpusrh_vol_cent + scale(subj_hpusrh_vol) + site_hpusrh_vol_cent*wave + scale(subj_hpusrh_vol)*wave +
-                (1 + wave|site_id/id), 
-              data = pfactor_red, 
-              control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-sub_b16i <- as.data.frame(c(summary(sub16)$coefficients[14,1]))
-sub_se16i <- as.data.frame(c(summary(sub16)$coefficients[14,2]))
-sub_p16i <- as.data.frame(c(summary(sub16)$coefficients[14,5]))
-sub_b16s <- as.data.frame(c(summary(sub16)$coefficients[16,1]))
-sub_se16s <- as.data.frame(c(summary(sub16)$coefficients[16,2]))
-sub_p16s <- as.data.frame(c(summary(sub16)$coefficients[16,5]))
-
-sub17 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
-                site_amygdalarh_vol_cent + scale(subj_amygdalarh_vol) + site_amygdalarh_vol_cent*wave + scale(subj_amygdalarh_vol)*wave +
-                (1 + wave|site_id/id), 
-              data = pfactor_red, 
-              control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-sub_b17i <- as.data.frame(c(summary(sub17)$coefficients[14,1]))
-sub_se17i <- as.data.frame(c(summary(sub17)$coefficients[14,2]))
-sub_p17i <- as.data.frame(c(summary(sub17)$coefficients[14,5]))
-sub_b17s <- as.data.frame(c(summary(sub17)$coefficients[16,1]))
-sub_se17s <- as.data.frame(c(summary(sub17)$coefficients[16,2]))
-sub_p17s <- as.data.frame(c(summary(sub17)$coefficients[16,5]))
-
-sub18 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
-                site_aar_vol_cent + scale(subj_aar_vol) + site_aar_vol_cent*wave + scale(subj_aar_vol)*wave +
-                (1 + wave|site_id/id), 
-              data = pfactor_red, 
-              control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-sub_b18i <- as.data.frame(c(summary(sub18)$coefficients[14,1]))
-sub_se18i <- as.data.frame(c(summary(sub18)$coefficients[14,2]))
-sub_p18i <- as.data.frame(c(summary(sub18)$coefficients[14,5]))
-sub_b18s <- as.data.frame(c(summary(sub18)$coefficients[16,1]))
-sub_se18s <- as.data.frame(c(summary(sub18)$coefficients[16,2]))
-sub_p18s <- as.data.frame(c(summary(sub18)$coefficients[16,5]))
-
-sub19 <- lmer(scalep ~ wave + sex + age + black + asian + hisp + other + achieva + discovery + ingenia + prisma +  
-                site_vedcrh_vol_cent + scale(subj_vedcrh_vol) + site_vedcrh_vol_cent*wave + scale(subj_vedcrh_vol)*wave +
-                (1 + wave|site_id/id), 
-              data = pfactor_red, 
-              control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
-sub_b19i <- as.data.frame(c(summary(sub19)$coefficients[14,1]))
-sub_se19i <- as.data.frame(c(summary(sub19)$coefficients[14,2]))
-sub_p19i <- as.data.frame(c(summary(sub19)$coefficients[14,5]))
-sub_b19s <- as.data.frame(c(summary(sub19)$coefficients[16,1]))
-sub_se19s <- as.data.frame(c(summary(sub19)$coefficients[16,2]))
-sub_p19s <- as.data.frame(c(summary(sub19)$coefficients[16,5]))
-
-#create data frame with all parcel-wise cortical volume st. estimates, SEs, and p-values
-sub_parcel <- data.frame(x=c("sub"))
-
-newsubbi <- c(sub_b1i,sub_b2i,sub_b3i,sub_b4i,sub_b5i,sub_b6i,sub_b7i,sub_b8i,sub_b9i,sub_b10i,sub_b11i,sub_b12i,sub_b13i,sub_b14i,sub_b15i,
-              sub_b16i,sub_b17i,sub_b18i,sub_b19i)
-sub_parcel <- cbind(sub_parcel,newsubbi)
-
-newsubbs <- c(sub_b1s,sub_b2s,sub_b3s,sub_b4s,sub_b5s,sub_b6s,sub_b7s,sub_b8s,sub_b9s,sub_b10s,sub_b11s,sub_b12s,sub_b13s,sub_b14s,sub_b15s,
-              sub_b16s,sub_b17s,sub_b18s,sub_b19s)
-sub_parcel <- cbind(sub_parcel,newsubbs)
-
-newsubsei <- c(sub_se1i,sub_se2i,sub_se3i,sub_se4i,sub_se5i,sub_se6i,sub_se7i,sub_se8i,sub_se9i,sub_se10i,sub_se11i,sub_se12i,sub_se13i,
-               sub_se14i,sub_se15i,sub_se16i,sub_se17i,sub_se18i,sub_se19i)
-sub_parcel <- cbind(sub_parcel,newsubsei)
-
-newsubses <- c(sub_se1s,sub_se2s,sub_se3s,sub_se4s,sub_se5s,sub_se6s,sub_se7s,sub_se8s,sub_se9s,sub_se10s,sub_se11s,sub_se12s,sub_se13s,
-               sub_se14s,sub_se15s,sub_se16s,sub_se17s,sub_se18s,sub_se19s)
-sub_parcel <- cbind(sub_parcel,newsubses)
-
-newsubpi <- c(sub_p1i,sub_p2i,sub_p3i,sub_p4i,sub_p5i,sub_p6i,sub_p7i,sub_p8i,sub_p9i,sub_p10i,sub_p11i,sub_p12i,sub_p13i,sub_p14i,sub_p15i,
-              sub_p16i,sub_p17i,sub_p18i,sub_p19i)
-sub_parcel <- cbind(sub_parcel,newsubpi)
-
-newsubps <- c(sub_p1s,sub_p2s,sub_p3s,sub_p4s,sub_p5s,sub_p6s,sub_p7s,sub_p8s,sub_p9s,sub_p10s,sub_p11s,sub_p12s,sub_p13s,sub_p14s,sub_p15s,
-              sub_p16s,sub_p17s,sub_p18s,sub_p19s)
-sub_parcel <- cbind(sub_parcel,newsubps)
-
-names(sub_parcel) <- c('sub','crbcortexlh_vol_bi','tplh_vol_bi','caudatelh_vol_bi','putamenlh_vol_bi','pallidumlh_vol_bi',
-                       'bstem_vol_bi','hpuslh_vol_bi','amygdalalh_vol_bi','aal_vol_bi','vedclh_vol_bi','crbcortexrh_vol_bi',
-                       'tprh_vol_bi','caudaterh_vol_bi','putamenrh_vol_bi','pallidumrh_vol_bi','hpusrh_vol_bi',
-                       'amygdalarh_vol_bi','aar_vol_bi','vedcrh_vol_bi',
-                       'crbcortexlh_vol_bs','tplh_vol_bs','caudatelh_vol_bs','putamenlh_vol_bs','pallidumlh_vol_bs',
-                       'bstem_vol_bs','hpuslh_vol_bs','amygdalalh_vol_bs','aal_vol_bs','vedclh_vol_bs','crbcortexrh_vol_bs',
-                       'tprh_vol_bs','caudaterh_vol_bs','putamenrh_vol_bs','pallidumrh_vol_bs','hpusrh_vol_bs',
-                       'amygdalarh_vol_bs','aar_vol_bs','vedcrh_vol_bs',
-                       'crbcortexlh_vol_sei','tplh_vol_sei','caudatelh_vol_sei','putamenlh_vol_sei','pallidumlh_vol_sei',
-                       'bstem_vol_sei','hpuslh_vol_sei','amygdalalh_vol_sei','aal_vol_sei','vedclh_vol_sei','crbcortexrh_vol_sei',
-                       'tprh_vol_sei','caudaterh_vol_sei','putamenrh_vol_sei','pallidumrh_vol_sei','hpusrh_vol_sei',
-                       'amygdalarh_vol_sei','aar_vol_sei','vedcrh_vol_sei',
-                       'crbcortexlh_vol_ses','tplh_vol_ses','caudatelh_vol_ses','putamenlh_vol_ses','pallidumlh_vol_ses',
-                       'bstem_vol_ses','hpuslh_vol_ses','amygdalalh_vol_ses','aal_vol_ses','vedclh_vol_ses','crbcortexrh_vol_ses',
-                       'tprh_vol_ses','caudaterh_vol_ses','putamenrh_vol_ses','pallidumrh_vol_ses','hpusrh_vol_ses',
-                       'amygdalarh_vol_ses','aar_vol_ses','vedcrh_vol_ses',
-                       'crbcortexlh_vol_pi','tplh_vol_pi','caudatelh_vol_pi','putamenlh_vol_pi','pallidumlh_vol_pi',
-                       'bstem_vol_pi','hpuslh_vol_pi','amygdalalh_vol_pi','aal_vol_pi','vedclh_vol_pi','crbcortexrh_vol_pi',
-                       'tprh_vol_pi','caudaterh_vol_pi','putamenrh_vol_pi','pallidumrh_vol_pi','hpusrh_vol_pi',
-                       'amygdalarh_vol_pi','aar_vol_pi','vedcrh_vol_pi',
-                       'crbcortexlh_vol_ps','tplh_vol_ps','caudatelh_vol_ps','putamenlh_vol_ps','pallidumlh_vol_ps',
-                       'bstem_vol_ps','hpuslh_vol_ps','amygdalalh_vol_ps','aal_vol_ps','vedclh_vol_ps','crbcortexrh_vol_ps',
-                       'tprh_vol_ps','caudaterh_vol_ps','putamenrh_vol_ps','pallidumrh_vol_ps','hpusrh_vol_ps',
-                       'amygdalarh_vol_ps','aar_vol_ps','vedcrh_vol_ps')
-
-#calculate 95% CIs and create lower and upper bound variables 
-sub_parcel$ci_lower_crbcortexlh_voli <- sub_parcel$crbcortexlh_vol_bi - 1.96*sub_parcel$crbcortexlh_vol_sei
-sub_parcel$ci_upper_crbcortexlh_voli <- sub_parcel$crbcortexlh_vol_bi + 1.96*sub_parcel$crbcortexlh_vol_sei
-sub_parcel$ci_lower_tplh_voli <- sub_parcel$tplh_vol_bi - 1.96*sub_parcel$tplh_vol_sei
-sub_parcel$ci_upper_tplh_voli <- sub_parcel$tplh_vol_bi + 1.96*sub_parcel$tplh_vol_sei
-sub_parcel$ci_lower_caudatelh_voli <- sub_parcel$caudatelh_vol_bi - 1.96*sub_parcel$caudatelh_vol_sei 
-sub_parcel$ci_upper_caudatelh_voli <- sub_parcel$caudatelh_vol_bi + 1.96*sub_parcel$caudatelh_vol_sei
-sub_parcel$ci_lower_putamenlh_voli <- sub_parcel$putamenlh_vol_bi - 1.96*sub_parcel$putamenlh_vol_sei 
-sub_parcel$ci_upper_putamenlh_voli <- sub_parcel$putamenlh_vol_bi + 1.96*sub_parcel$putamenlh_vol_sei
-sub_parcel$ci_lower_pallidumlh_voli <- sub_parcel$pallidumlh_vol_bi - 1.96*sub_parcel$pallidumlh_vol_sei 
-sub_parcel$ci_upper_pallidumlh_voli <- sub_parcel$pallidumlh_vol_bi + 1.96*sub_parcel$pallidumlh_vol_sei
-sub_parcel$ci_lower_bstem_voli <- sub_parcel$bstem_vol_bi - 1.96*sub_parcel$bstem_vol_sei 
-sub_parcel$ci_upper_bstem_voli <- sub_parcel$bstem_vol_bi + 1.96*sub_parcel$bstem_vol_sei
-sub_parcel$ci_lower_hpuslh_voli <- sub_parcel$hpuslh_vol_bi - 1.96*sub_parcel$hpuslh_vol_sei 
-sub_parcel$ci_upper_hpuslh_voli <- sub_parcel$hpuslh_vol_bi + 1.96*sub_parcel$hpuslh_vol_sei
-sub_parcel$ci_lower_amygdalalh_voli <- sub_parcel$amygdalalh_vol_bi - 1.96*sub_parcel$amygdalalh_vol_sei 
-sub_parcel$ci_upper_amygdalalh_voli <- sub_parcel$amygdalalh_vol_bi + 1.96*sub_parcel$amygdalalh_vol_sei
-sub_parcel$ci_lower_aal_voli <- sub_parcel$aal_vol_bi - 1.96*sub_parcel$aal_vol_sei 
-sub_parcel$ci_upper_aal_voli <- sub_parcel$aal_vol_bi + 1.96*sub_parcel$aal_vol_sei
-sub_parcel$ci_lower_vedclh_voli <- sub_parcel$vedclh_vol_bi - 1.96*sub_parcel$vedclh_vol_sei 
-sub_parcel$ci_upper_vedclh_voli <- sub_parcel$vedclh_vol_bi + 1.96*sub_parcel$vedclh_vol_sei
-
-sub_parcel$ci_lower_crbcortexrh_voli <- sub_parcel$crbcortexrh_vol_bi - 1.96*sub_parcel$crbcortexrh_vol_sei 
-sub_parcel$ci_upper_crbcortexrh_voli <- sub_parcel$crbcortexrh_vol_bi + 1.96*sub_parcel$crbcortexrh_vol_sei
-sub_parcel$ci_lower_tprh_voli <- sub_parcel$tprh_vol_bi - 1.96*sub_parcel$tprh_vol_sei 
-sub_parcel$ci_upper_tprh_voli <- sub_parcel$tprh_vol_bi + 1.96*sub_parcel$tprh_vol_sei
-sub_parcel$ci_lower_caudaterh_voli <- sub_parcel$caudaterh_vol_bi - 1.96*sub_parcel$caudaterh_vol_sei
-sub_parcel$ci_upper_caudaterh_voli <- sub_parcel$caudaterh_vol_bi + 1.96*sub_parcel$caudaterh_vol_sei
-sub_parcel$ci_lower_putamenrh_voli <- sub_parcel$putamenrh_vol_bi - 1.96*sub_parcel$putamenrh_vol_sei 
-sub_parcel$ci_upper_putamenrh_voli <- sub_parcel$putamenrh_vol_bi + 1.96*sub_parcel$putamenrh_vol_sei
-sub_parcel$ci_lower_pallidumrh_voli <- sub_parcel$pallidumrh_vol_bi - 1.96*sub_parcel$pallidumrh_vol_sei 
-sub_parcel$ci_upper_pallidumrh_voli <- sub_parcel$pallidumrh_vol_bi + 1.96*sub_parcel$pallidumrh_vol_sei
-sub_parcel$ci_lower_hpusrh_voli <- sub_parcel$hpusrh_vol_bi - 1.96*sub_parcel$hpusrh_vol_sei 
-sub_parcel$ci_upper_hpusrh_voli <- sub_parcel$hpusrh_vol_bi + 1.96*sub_parcel$hpusrh_vol_sei
-sub_parcel$ci_lower_amygdalarh_voli <- sub_parcel$amygdalarh_vol_bi - 1.96*sub_parcel$amygdalarh_vol_sei 
-sub_parcel$ci_upper_amygdalarh_voli <- sub_parcel$amygdalarh_vol_bi + 1.96*sub_parcel$amygdalarh_vol_sei
-sub_parcel$ci_lower_aar_voli <- sub_parcel$aar_vol_bi - 1.96*sub_parcel$aar_vol_sei 
-sub_parcel$ci_upper_aar_voli <- sub_parcel$aar_vol_bi + 1.96*sub_parcel$aar_vol_sei
-sub_parcel$ci_lower_vedcrh_voli <- sub_parcel$vedcrh_vol_bi - 1.96*sub_parcel$vedcrh_vol_sei 
-sub_parcel$ci_upper_vedcrh_voli <- sub_parcel$vedcrh_vol_bi + 1.96*sub_parcel$vedcrh_vol_sei
-
-write.csv(sub_parcel, "Parcel-Wise Subcortical Volume MLM Analysis Output Standardized_FINAL.csv") #write csv file
-
-
-#ggseg figure of parcel-wise cortical volume analyses with p showing std. betas - for parcels that survived FDR correction (Figure 2A)
+#ggseg figure of parcel-wise cortical volume analyses with intercept of p  (Figure 2A)
+#showing std. betas for parcels that survived FDR correction
 
 vol_results_fdr= data.frame(cbind(region=c("bankssts","caudal anterior cingulate","caudal middle frontal","cuneus","entorhinal",
                                            "fusiform","inferior parietal","inferior temporal","isthmus cingulate","lateral occipital",
@@ -4836,7 +4186,7 @@ vol_results_fdr= data.frame(cbind(region=c("bankssts","caudal anterior cingulate
                                            "paracentral","pars opercularis","pars orbitalis","pars triangularis","pericalcarine",
                                            "postcentral","posterior cingulate","precentral","precuneus","rostral anterior cingulate",
                                            "rostral middle frontal","superior frontal","superior parietal","superior temporal",
-                                           "supramarginal","temporal pole","transverse temporal","insula",
+                                           "supramarginal","frontal pole","temporal pole","transverse temporal","insula",
                                            "bankssts","caudal anterior cingulate","caudal middle frontal","cuneus","entorhinal",
                                            "fusiform","inferior parietal","inferior temporal","isthmus cingulate","lateral occipital",
                                            "lateral orbitofrontal","lingual","medial orbitofrontal","middle temporal","parahippocampal",
@@ -4844,19 +4194,19 @@ vol_results_fdr= data.frame(cbind(region=c("bankssts","caudal anterior cingulate
                                            "postcentral","posterior cingulate","precentral","precuneus","rostral anterior cingulate",
                                            "rostral middle frontal","superior frontal","superior parietal","superior temporal",
                                            "supramarginal","frontal pole","temporal pole","transverse temporal","insula"),
-                                  stdb=c(-0.042368321,-0.035717618,-0.036385733,-0.025642445,-0.03143749,-0.064598625,-0.069576686,
-                                         -0.054125201,-0.053063053,-0.042422373,-0.063394951,-0.051823327,-0.035497437,-0.074020718,
-                                         -0.046714585,-0.047766861,-0.022548963,-0.042677898,-0.031600652,-0.02184436,-0.07081975,
-                                         -0.056360759,-0.081063624,-0.057722969,-0.053262367,-0.058546438,-0.066479253,-0.060252816,
-                                         -0.060426257,-0.077828238,-0.041944366,-0.02965012,-0.062519618,-0.036433259,-0.049468731,
-                                         -0.038449068,-0.028045668,-0.042602437,-0.0730509,-0.07345152,-0.073528626,-0.033691576,
-                                         -0.040178517,-0.061678671,-0.03090881,-0.043071623,-0.081208478,-0.038049519,-0.058252336,
-                                         -0.029326333,-0.049818597,-0.02290476,-0.024347901,-0.077672815,-0.059497585,-0.076860362,
-                                         -0.054229699,-0.045887035,-0.058750679,-0.060038727,-0.045835286,-0.056136484,-0.068509275,
-                                         -0.068412512,-0.032373698,-0.038495449,-0.067274413),
+                                  stdb=c(-0.044442146,-0.037934895,-0.038533423,-0.027301511,-0.032238951,-0.066706143,-0.072769163,
+                                         -0.055635515,-0.054843622,-0.04444371,-0.062478719,-0.054294482,-0.03649713,-0.075163216,
+                                         -0.047883583,-0.049940917,-0.024957467,-0.042916,-0.033209818,-0.022804155,-0.072364485,
+                                         -0.058861599,-0.081781108,-0.059394746,-0.054612238,-0.061579186,-0.067041611,-0.061849142,
+                                         -0.061441488,-0.078494473,-0.022668209,-0.043685938,-0.032076471,-0.06441222,-0.038801084,
+                                         -0.051737306,-0.040442193,-0.029595937,-0.044426026,-0.074568084,-0.07492731,-0.073741701,
+                                         -0.035818758,-0.042248873,-0.061502977,-0.033862358,-0.043677825,-0.081320089,-0.040039865,
+                                         -0.061203854,-0.031859495,-0.049571224,-0.024763728,-0.025089668,-0.079342578,-0.061865042,
+                                         -0.077320108,-0.055878333,-0.04744946,-0.06141488,-0.060528767,-0.048102698,-0.057834141,
+                                         -0.070623303,-0.070620839,-0.032523485,-0.040497726,-0.069122537),
                                   hemi=c("left","left","left","left","left","left","left","left","left","left","left","left","left","left",
                                          "left","left","left","left","left","left","left","left","left","left","left","left","left","left",
-                                         "left","left","left","left","left","right","right","right","right","right","right","right",
+                                         "left","left","left","left","left","left","right","right","right","right","right","right","right",
                                          "right","right","right","right","right","right","right","right","right","right","right","right","right",
                                          "right","right","right","right","right","right","right","right","right","right","right","right","right",
                                          "right")),
@@ -4864,12 +4214,16 @@ vol_results_fdr= data.frame(cbind(region=c("bankssts","caudal anterior cingulate
 
 vol_results_fdr %>% 
   ggseg(mapping=aes(fill=as.numeric(stdb)),
-        colour="black",size=.6) +
+        colour="black",size=.6, position = "stacked") +
   scale_fill_gradient(low = "yellow",
                       high = "red") +
   ggtitle("Parcel-Wise Cortical Volume")
 
-#ggseg figure of parcel-wise surface area analyses with p showing std. betas - for parcels that survived FDR correction (Figure 2B)
+ggsave("figure2a.tiff", dpi=600)
+dev.off()
+
+#ggseg figure of parcel-wise surface area analyses with intercept of p (Figure 2B)
+#showing std. betas for parcels that survived FDR correction 
 
 area_results_fdr = data.frame(cbind(region=c("bankssts","caudal anterior cingulate","caudal middle frontal","cuneus","entorhinal",
                                              "fusiform","inferior parietal","inferior temporal","isthmus cingulate","lateral occipital",
@@ -4885,16 +4239,16 @@ area_results_fdr = data.frame(cbind(region=c("bankssts","caudal anterior cingula
                                              "postcentral","posterior cingulate","precentral","precuneus","rostral anterior cingulate",
                                              "rostral middle frontal","superior frontal","superior parietal","superior temporal",
                                              "supramarginal","frontal pole","temporal pole","transverse temporal","insula"),
-                                    stdb=c(-0.038278791,-0.044845218,-0.042424554,-0.036515479,-0.030829005,-0.067368816,-0.066182309,
-                                           -0.052949451,-0.058380138,-0.043662973,-0.065922201,-0.048812821,-0.044014255,-0.06448414,
-                                           -0.046843378,-0.04401945,-0.033647862,-0.056584523,-0.046453091,-0.029500029,-0.079751855,
-                                           -0.068358722,-0.073826869,-0.063881976,-0.061525938,-0.066855365,-0.072314495,-0.056852908,
-                                           -0.071361287,-0.077119706,-0.058310678,-0.053063398,-0.031987585,-0.067686192,-0.043065692,
-                                           -0.061373984,-0.048279067,-0.038015022,-0.040751586,-0.080862887,-0.076608991,-0.052949451,
-                                           -0.042308527,-0.04172251,-0.065465506,-0.032785757,-0.068806165,-0.084900452,-0.045006604,
-                                           -0.055122552,-0.036044644,-0.069159196,-0.035125562,-0.029212916,-0.080899515,-0.064136644,
-                                           -0.070306278,-0.061630446,-0.060028754,-0.068942733,-0.070410928,-0.047015608,-0.065977443,
-                                           -0.070331422,-0.070333964,-0.047115717,-0.042272271,-0.058706186),
+                                    stdb=c(-0.039664054,-0.046965521,-0.045489447,-0.03832486,-0.031177679,-0.069906023,-0.069653841,
+                                           -0.055509803,-0.060104549,-0.046746281,-0.066033418,-0.051584669,-0.045207628,-0.067024,
+                                           -0.048316062,-0.045670932,-0.036830483,-0.056392094,-0.048709867,-0.031346745,-0.081565181,
+                                           -0.070859256,-0.076317178,-0.065524742,-0.062961034,-0.070004856,-0.073469113,-0.059556445,
+                                           -0.073064834,-0.078455552,-0.060461487,-0.054788501,-0.033837062,-0.070713805,-0.04461311,
+                                           -0.06363439,-0.050630539,-0.03950863,-0.04195717,-0.083039214,-0.078739881,-0.084076078,
+                                           -0.044482946,-0.044775994,-0.066531291,-0.035303865,-0.06873283,-0.086427139,-0.046717137,
+                                           -0.057493367,-0.039175445,-0.069495688,-0.037492758,-0.030593748,-0.083090861,-0.066579447,
+                                           -0.072858195,-0.063165199,-0.061330221,-0.071983546,-0.071467326,-0.049885011,-0.068109268,
+                                           -0.072624611,-0.072635249,-0.04758223,-0.044563253,-0.061684287),
                                     hemi=c("left","left","left","left","left","left","left","left","left","left","left","left","left","left",
                                            "left","left","left","left","left","left","left","left","left","left","left","left","left","left",
                                            "left","left","left","left","left","left","right","right","right","right","right","right","right",
@@ -4905,53 +4259,38 @@ area_results_fdr = data.frame(cbind(region=c("bankssts","caudal anterior cingula
 
 area_results_fdr %>% 
   ggseg(mapping=aes(fill=as.numeric(stdb)), 
-        colour="black",size=.6) +
+        colour="black",size=.6, position = "stacked") +
   scale_fill_gradient(low = "yellow",
                       high = "red") +
   ggtitle("Parcel-Wise Cortical Surface Area")
 
-ggseg(atlas=aseg,mapping=aes(fill=region))
+(patch1 / patch2)
 
+ggsave("figure2b.tiff", dpi=600)
+dev.off()
 
-#ggseg figure of parcel-wise cortical thickness analyses with INT showing std. betas - for parcels that survived FDR correction (Figure S2)
-
-thick_results_fdr = data.frame(cbind(region=c("inferior temporal","lingual","middle temporal","parahippocampal","paracentral","postcentral","precentral",
-                                              "superior parietal","cuneus","lingual","postcentral","superior parietal"),
-                                     stdb=c(0.01397659,0.013431228,0.013937159,0.013453852,0.014844924,0.018167898,0.015874702,
-                                            0.013916114,0.013694289,0.016436235,0.016635508,0.013832886),
-                                     hemi=c("left","left","left","left","left","left","left","left","right","right","right","right")),
-                               stringsAsFactors=F)
-
-thick_results_fdr %>% 
-  ggseg(mapping=aes(fill=as.numeric(stdb)), position="stacked",
-        colour="black",size=.6) +
-  scale_fill_gradient(high = "yellow",
-                      low = "red") +
-  ggtitle("Parcel-Wise Cortical Thickness")
-
-
-#forest plot of parcel-wise subcortical volume analysis with p (Figure 2C)
+#forest plot of parcel-wise subcortical volume analysis with intercept of p (Figure 2C)
 
 sub_forest <- data.frame(variable=c("Left Cerebellar Cortex","Left Thalamus Proper","Left Caudate","Left Putamen","Left Pallidum",
                                     "Brainstem","Left Hippocampus","Left Amygdala","Left Accumbens","Left Ventral DC",
                                     "Right Cerebellar Cortex","Right Thalamus Proper","Right Caudate","Right Putamen","Right Pallidum",
                                     "Right Hippocampus","Right Amygdala","Right Accumbens","Right Ventral DC"),
-                         stdb=c(-0.062526529,-0.068174585,-0.050167024,-0.04306801,-0.043305729,-0.069430328,-0.068697041,-0.053180425,
-                                -0.04888736,-0.064164359,-0.055479243,-0.055929446,-0.046133413,-0.050503415,-0.030368098,-0.061715518,
-                                -0.055990013,-0.05952229,-0.058611321),
-                         ub=c(-0.040013875,-0.046446858,-0.02947583,-0.021562199,-0.022104379,-0.047509596,-0.046879632,-0.031469191,
-                              -0.027605907,-0.04211372,-0.032795663,-0.034034863,-0.025415504,-0.028962497,-0.009133533,-0.040122157,
-                              -0.034160325,-0.038574215,-0.03650152),
-                         lb=c(-0.085039183,-0.089902312,-0.070858217,-0.064573821,-0.064507078,-0.09135106,-0.09051445,-0.07489166,
-                              -0.070168813,-0.086214997,-0.078162823,-0.07782403,-0.066851322,-0.072044334,-0.051602664,-0.083308879,
-                              -0.077819702,-0.080470366,-0.080721123))
+                         stdb=c(-0.063016445,-0.068991203,-0.051781371,-0.046686515,-0.044789289,-0.070244753,-0.069607294,
+                                -0.053955951,-0.049337098,-0.064610952,-0.056538964,-0.056915082,-0.047787121,-0.053899895,
+                                -0.032426172,-0.063482171,-0.056946363,-0.058735852,-0.059454009),
+                         ub=c(-0.041101092,-0.04735793,-0.03118178,-0.025192032,-0.023539142,-0.048316128,-0.048218383,
+                              -0.032549621,-0.028072098,-0.04275854,-0.034488017,-0.035114338,-0.027189707,-0.03241209,
+                              -0.01110569,-0.042245455,-0.035337209,-0.037790262,-0.037525096),
+                         lb=c(-0.084931799,-0.090624475,-0.072380963,-0.068180998,-0.066039435,-0.092173379,-0.090996205,
+                              -0.075362282,-0.070602097,-0.086463364,-0.07858991,-0.078715826,-0.068384536,-0.075387699,
+                              -0.053746655,-0.084718887,-0.078555518,-0.079681442,-0.081382923))
 tabletext <- cbind(
   c(expr("Left Cerebellar Cortex"),expr("Left Thalamus Proper"),expr("Left Caudate"),expr("Left Putamen"),expr("Left Pallidum"),
     expr("Brainstem"),expr("Left Hippocampus"),expr("Left Amygdala"),expr("Left Accumbens"),expr("Left Ventral Diencephalon"),
     expr("Right Cerebellar Cortex"),expr("Right Thalamus Proper"),expr("Right Caudate"),expr("Right Putamen"),expr("Right Pallidum"),
     expr("Right Hippocampus"),expr("Right Amygdala"),expr("Right Accumbens"),expr("Right Ventral Diencephalon")) 
 )
-png(paste("Parcel_wise_subcortical_volume_forest_stdb.png",sep=""),height=6,width=5,res=300,units="in")
+png(paste("Parcel_wise_subcortical_volume_forest_stdb.png",sep=""),height=6,width=5,res=600,units="in")
 print( forestplot(tabletext,
                   mean =sub_forest$stdb,
                   lower=sub_forest$lb,
@@ -4961,3 +4300,897 @@ print( forestplot(tabletext,
                   xlab="Standardized Beta" ) )
 dev.off()
 
+#ggseg figure of parcel-wise cortical thickness analyses with slope for internalizing (Figure S2)
+#showing std. betas for parcels that survived FDR correction 
+
+thick_results_fdr = data.frame(cbind(region=c("inferior temporal","lingual","middle temporal","parahippocampal","paracentral","postcentral",
+                                              "precentral","superior parietal","cuneus","postcentral","superior parietal"),
+                                     stdb=c(0.013604721,0.012604543,0.013290636,0.013291767,0.014031809,0.017165795,0.015164515,
+                                            0.013098926,0.012781376,0.015880157,0.013212116),
+                                     hemi=c("left","left","left","left","left","left","left","left","right","right","right")),
+                               stringsAsFactors=F)
+
+thick_results_fdr %>% 
+  ggseg(mapping=aes(fill=as.numeric(stdb)), position="stacked",
+        colour="black",size=.6) +
+  scale_fill_gradient(high = "yellow",
+                      low = "red") +
+  ggtitle("Parcel-Wise Cortical Thickness")
+
+ggsave("figureS2_updated.tiff", dpi=600)
+dev.off()
+
+##Sensitivity analyses
+#conditional three-level growth model with global brain structure measures predicting the psychopathology factor scores from higher-order/correlated factors models (looped) 
+#covariates: sex, age, scanner model dummies, parent education, combined family income
+#standardized betas, standard errors, and p-values for intercepts (i.e., intb, intse, intp) and slopes (i.e., slb, slse, slp) were saved in a csv file
+
+wholebrainst_ses <- data.frame(x=c("CT_int","CT_sl","SA_int","SA_sl","cortvol_int","cortvol_sl","subcortvol_int","subcortvol_sl"))
+for (i in 424:429){ # columns are factor scores
+  CT_intb <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma + ParentEduc + CombFamilyIncome +
+                            site_meanct_cent + scalesubjmeanct + site_meanct_cent*wave + scalesubjmeanct*wave +
+                            (1 + wave|site_id/id), #random intercept and slope for subject and site 
+                          data = pfactor_red, 
+                          control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[12,1]
+  CT_slb <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma + ParentEduc + CombFamilyIncome +
+                           site_meanct_cent + scalesubjmeanct + site_meanct_cent*wave + scalesubjmeanct*wave +
+                           (1 + wave|site_id/id), 
+                         data = pfactor_red, 
+                         control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[14,1]
+  CT_intse <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma + ParentEduc + CombFamilyIncome +
+                             site_meanct_cent + scalesubjmeanct + site_meanct_cent*wave + scalesubjmeanct*wave + 
+                             (1 + wave|site_id/id), 
+                           data = pfactor_red, 
+                           control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[12,2]
+  CT_slse <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma + ParentEduc + CombFamilyIncome +
+                            site_meanct_cent + scalesubjmeanct + site_meanct_cent*wave + scalesubjmeanct*wave + 
+                            (1 + wave|site_id/id), 
+                          data = pfactor_red, 
+                          control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[14,2]
+  CT_intp <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma + ParentEduc + CombFamilyIncome +
+                            site_meanct_cent + scalesubjmeanct + site_meanct_cent*wave + scalesubjmeanct*wave + 
+                            (1 + wave|site_id/id), 
+                          data = pfactor_red, 
+                          control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[12,5]
+  CT_slp <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma + ParentEduc + CombFamilyIncome +
+                           site_meanct_cent + scalesubjmeanct + site_meanct_cent*wave + scalesubjmeanct*wave + 
+                           (1 + wave|site_id/id), 
+                         data = pfactor_red, 
+                         control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[14,5]
+  SA_intb <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma + ParentEduc + CombFamilyIncome +
+                            site_totalarea_cent + scalesubjtotalarea + site_totalarea_cent*wave + scalesubjtotalarea*wave + 
+                            (1 + wave|site_id/id), 
+                          data = pfactor_red, 
+                          control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[12,1]
+  SA_slb <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma + ParentEduc + CombFamilyIncome +
+                           site_totalarea_cent + scalesubjtotalarea + site_totalarea_cent*wave + scalesubjtotalarea*wave + 
+                           (1 + wave|site_id/id), 
+                         data = pfactor_red, 
+                         control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[14,1]
+  SA_intse <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma + ParentEduc + CombFamilyIncome +
+                             site_totalarea_cent + scalesubjtotalarea + site_totalarea_cent*wave + scalesubjtotalarea*wave +
+                             (1 + wave|site_id/id), 
+                           data = pfactor_red, 
+                           control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[12,2]
+  SA_slse <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma + ParentEduc + CombFamilyIncome +
+                            site_totalarea_cent + scalesubjtotalarea + site_totalarea_cent*wave + scalesubjtotalarea*wave +
+                            (1 + wave|site_id/id), 
+                          data = pfactor_red, 
+                          control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[14,2]
+  SA_intp <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma + ParentEduc + CombFamilyIncome +
+                            site_totalarea_cent + scalesubjtotalarea + site_totalarea_cent*wave + scalesubjtotalarea*wave +
+                            (1 + wave|site_id/id), 
+                          data = pfactor_red, 
+                          control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[12,5]
+  SA_slp <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma + ParentEduc + CombFamilyIncome +
+                           site_totalarea_cent + scalesubjtotalarea + site_totalarea_cent*wave + scalesubjtotalarea*wave + 
+                           (1 + wave|site_id/id), 
+                         data = pfactor_red, 
+                         control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[14,5]
+  cortvol_intb <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma + ParentEduc + CombFamilyIncome +
+                                 site_totalvol_cent + scalesubjtotalvol + site_totalvol_cent*wave + scalesubjtotalvol*wave + 
+                                 (1 + wave|site_id/id), 
+                               data = pfactor_red, 
+                               control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[12,1]
+  cortvol_slb <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma + ParentEduc + CombFamilyIncome +
+                                site_totalvol_cent + scalesubjtotalvol + site_totalvol_cent*wave + scalesubjtotalvol*wave + 
+                                (1 + wave|site_id/id), 
+                              data = pfactor_red, 
+                              control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[14,1]
+  cortvol_intse <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma + ParentEduc + CombFamilyIncome +
+                                  site_totalvol_cent + scalesubjtotalvol + site_totalvol_cent*wave + scalesubjtotalvol*wave + 
+                                  (1 + wave|site_id/id), 
+                                data = pfactor_red, 
+                                control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[12,2]
+  cortvol_slse <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma + ParentEduc + CombFamilyIncome +
+                                 site_totalvol_cent + scalesubjtotalvol + site_totalvol_cent*wave + scalesubjtotalvol*wave + 
+                                 (1 + wave|site_id/id), 
+                               data = pfactor_red, 
+                               control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[14,2]
+  cortvol_intp <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma + ParentEduc + CombFamilyIncome +
+                                 site_totalvol_cent + scalesubjtotalvol + site_totalvol_cent*wave + scalesubjtotalvol*wave + 
+                                 (1 + wave|site_id/id), 
+                               data = pfactor_red, 
+                               control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[12,5]
+  cortvol_slp <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma + ParentEduc + CombFamilyIncome +
+                                site_totalvol_cent + scalesubjtotalvol + site_totalvol_cent*wave + scalesubjtotalvol*wave + 
+                                (1 + wave|site_id/id), 
+                              data = pfactor_red, 
+                              control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[14,5]
+  subcortvol_intb <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma + ParentEduc + CombFamilyIncome +
+                                    site_subcort_vol_cent + scalesubjsubcort_vol + site_subcort_vol_cent*wave + scalesubjsubcort_vol*wave + 
+                                    (1 + wave|site_id/id), 
+                                  data = pfactor_red, 
+                                  control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[12,1]
+  subcortvol_slb <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma + ParentEduc + CombFamilyIncome +
+                                   site_subcort_vol_cent + scalesubjsubcort_vol + site_subcort_vol_cent*wave + scalesubjsubcort_vol*wave +
+                                   (1 + wave|site_id/id), 
+                                 data = pfactor_red, 
+                                 control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[14,1]
+  subcortvol_intse <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma + ParentEduc + CombFamilyIncome +
+                                     site_subcort_vol_cent + scalesubjsubcort_vol + site_subcort_vol_cent*wave + scalesubjsubcort_vol*wave +
+                                     (1 + wave|site_id/id), 
+                                   data = pfactor_red, 
+                                   control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[12,2]
+  subcortvol_slse <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma + ParentEduc + CombFamilyIncome +
+                                    site_subcort_vol_cent + scalesubjsubcort_vol + site_subcort_vol_cent*wave + scalesubjsubcort_vol*wave +
+                                    (1 + wave|site_id/id), 
+                                  data = pfactor_red, 
+                                  control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[14,2]
+  subcortvol_intp <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma + ParentEduc + CombFamilyIncome +
+                                    site_subcort_vol_cent + scalesubjsubcort_vol + site_subcort_vol_cent*wave + scalesubjsubcort_vol*wave + 
+                                    (1 + wave|site_id/id), 
+                                  data = pfactor_red, 
+                                  control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[12,5]
+  subcortvol_slp <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma + ParentEduc + CombFamilyIncome +
+                                   site_subcort_vol_cent + scalesubjsubcort_vol + site_subcort_vol_cent*wave + scalesubjsubcort_vol*wave + 
+                                   (1 + wave|site_id/id), 
+                                 data = pfactor_red, 
+                                 control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[14,5]
+  newb <- c(CT_intb,CT_slb,SA_intb,SA_slb,cortvol_intb,cortvol_slb,subcortvol_intb,subcortvol_slb)
+  wholebrainst_ses <- cbind(wholebrainst_ses,newb)
+  names(wholebrainst_ses)[ncol(wholebrainst_ses)] <- names(pfactor_red)[i]
+  newse <- c(CT_intse,CT_slse,SA_intse,SA_slse,cortvol_intse,cortvol_slse,subcortvol_intse,subcortvol_slse)
+  wholebrainst_ses <- cbind(wholebrainst_ses,newse)
+  names(wholebrainst_ses)[ncol(wholebrainst_ses)] <- names(pfactor_red)[i]
+  newp <- c(CT_intp,CT_slp,SA_intp,SA_slp,cortvol_intp,cortvol_slp,subcortvol_intp,subcortvol_slp)
+  wholebrainst_ses <- cbind(wholebrainst_ses,newp)
+  names(wholebrainst_ses)[ncol(wholebrainst_ses)] <- names(pfactor_red)[i]
+}
+wholebrainst_ses
+
+names(wholebrainst_ses) <- c("x","p_beta","p_se","p_pval","ext_beta","ext_se","ext_pval","int_beta","int_se","int_pval",
+                             "nd_beta","nd_se","nd_pval","som_beta","som_se","som_pval","det_beta","det_se","det_pval")
+
+#calculate 95% CIs and create lower and upper bound variables 
+wholebrainst_ses$ci_lower_p <- wholebrainst_ses$p_beta - 1.96*wholebrainst_ses$p_se 
+wholebrainst_ses$ci_upper_p <- wholebrainst_ses$p_beta + 1.96*wholebrainst_ses$p_se 
+wholebrainst_ses$ci_lower_ext <- wholebrainst_ses$ext_beta - 1.96*wholebrainst_ses$ext_se 
+wholebrainst_ses$ci_upper_ext <- wholebrainst_ses$ext_beta + 1.96*wholebrainst_ses$ext_se 
+wholebrainst_ses$ci_lower_int <- wholebrainst_ses$int_beta - 1.96*wholebrainst_ses$int_se 
+wholebrainst_ses$ci_upper_int <- wholebrainst_ses$int_beta + 1.96*wholebrainst_ses$int_se 
+wholebrainst_ses$ci_lower_nd <- wholebrainst_ses$nd_beta - 1.96*wholebrainst_ses$nd_se 
+wholebrainst_ses$ci_upper_nd <- wholebrainst_ses$nd_beta + 1.96*wholebrainst_ses$nd_se 
+wholebrainst_ses$ci_lower_som <- wholebrainst_ses$som_beta - 1.96*wholebrainst_ses$som_se 
+wholebrainst_ses$ci_upper_som <- wholebrainst_ses$som_beta + 1.96*wholebrainst_ses$som_se
+wholebrainst_ses$ci_lower_det <- wholebrainst_ses$det_beta - 1.96*wholebrainst_ses$det_se 
+wholebrainst_ses$ci_upper_det <- wholebrainst_ses$det_beta + 1.96*wholebrainst_ses$det_se
+
+write.csv(wholebrainst_ses, "Global Structure MLM Analysis Output Standardized for Table_SES_SuppTable9.csv") #write csv file
+
+pval_ses <- dplyr::select(wholebrainst_ses, c("p_pval","ext_pval","int_pval","nd_pval","som_pval","det_pval"))
+pval_ses_fdr <- transform(pval_ses, adj.p = p.adjust(as.matrix(pval_ses),method = "BH"))
+sum(pval_ses_fdr$adj.p<0.05)
+write.csv(pval_ses_fdr, "FDR adjusted pvalues_global structure analysis_SES.csv")
+
+#conditional three-level growth model with global brain structure measures predicting the psychopathology factor scores from higher-order/correlated factors models (looped) 
+#covariates: sex, age, scanner model dummies, psychotropic meds
+#standardized betas, standard errors, and p-values for intercepts (i.e., intb, intse, intp) and slopes (i.e., slb, slse, slp) were saved in a csv file
+
+wholebrainst_meds <- data.frame(x=c("CT_int","CT_sl","SA_int","SA_sl","cortvol_int","cortvol_sl","subcortvol_int","subcortvol_sl"))
+for (i in 424:429){ # columns are factor scores
+  CT_intb <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma + psych_med_recode +
+                            site_meanct_cent + scalesubjmeanct + site_meanct_cent*wave + scalesubjmeanct*wave +
+                            (1 + wave|site_id/id), #random intercept and slope for subject and site 
+                          data = pfactor_red, 
+                          control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[11,1]
+  CT_slb <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma + psych_med_recode +
+                           site_meanct_cent + scalesubjmeanct + site_meanct_cent*wave + scalesubjmeanct*wave +
+                           (1 + wave|site_id/id), 
+                         data = pfactor_red, 
+                         control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[13,1]
+  CT_intse <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma + psych_med_recode +
+                             site_meanct_cent + scalesubjmeanct + site_meanct_cent*wave + scalesubjmeanct*wave + 
+                             (1 + wave|site_id/id), 
+                           data = pfactor_red, 
+                           control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[11,2]
+  CT_slse <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma + psych_med_recode +
+                            site_meanct_cent + scalesubjmeanct + site_meanct_cent*wave + scalesubjmeanct*wave + 
+                            (1 + wave|site_id/id), 
+                          data = pfactor_red, 
+                          control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[13,2]
+  CT_intp <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma + psych_med_recode +
+                            site_meanct_cent + scalesubjmeanct + site_meanct_cent*wave + scalesubjmeanct*wave + 
+                            (1 + wave|site_id/id), 
+                          data = pfactor_red, 
+                          control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[11,5]
+  CT_slp <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma + psych_med_recode +
+                           site_meanct_cent + scalesubjmeanct + site_meanct_cent*wave + scalesubjmeanct*wave + 
+                           (1 + wave|site_id/id), 
+                         data = pfactor_red, 
+                         control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[13,5]
+  SA_intb <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma + psych_med_recode +
+                            site_totalarea_cent + scalesubjtotalarea + site_totalarea_cent*wave + scalesubjtotalarea*wave + 
+                            (1 + wave|site_id/id), 
+                          data = pfactor_red, 
+                          control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[11,1]
+  SA_slb <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma + psych_med_recode +
+                           site_totalarea_cent + scalesubjtotalarea + site_totalarea_cent*wave + scalesubjtotalarea*wave + 
+                           (1 + wave|site_id/id), 
+                         data = pfactor_red, 
+                         control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[13,1]
+  SA_intse <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma + psych_med_recode +
+                             site_totalarea_cent + scalesubjtotalarea + site_totalarea_cent*wave + scalesubjtotalarea*wave +
+                             (1 + wave|site_id/id), 
+                           data = pfactor_red, 
+                           control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[11,2]
+  SA_slse <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma + psych_med_recode +
+                            site_totalarea_cent + scalesubjtotalarea + site_totalarea_cent*wave + scalesubjtotalarea*wave +
+                            (1 + wave|site_id/id), 
+                          data = pfactor_red, 
+                          control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[13,2]
+  SA_intp <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma + psych_med_recode +
+                            site_totalarea_cent + scalesubjtotalarea + site_totalarea_cent*wave + scalesubjtotalarea*wave +
+                            (1 + wave|site_id/id), 
+                          data = pfactor_red, 
+                          control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[11,5]
+  SA_slp <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma + psych_med_recode +
+                           site_totalarea_cent + scalesubjtotalarea + site_totalarea_cent*wave + scalesubjtotalarea*wave + 
+                           (1 + wave|site_id/id), 
+                         data = pfactor_red, 
+                         control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[13,5]
+  cortvol_intb <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma + psych_med_recode +
+                                 site_totalvol_cent + scalesubjtotalvol + site_totalvol_cent*wave + scalesubjtotalvol*wave + 
+                                 (1 + wave|site_id/id), 
+                               data = pfactor_red, 
+                               control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[11,1]
+  cortvol_slb <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma + psych_med_recode +
+                                site_totalvol_cent + scalesubjtotalvol + site_totalvol_cent*wave + scalesubjtotalvol*wave + 
+                                (1 + wave|site_id/id), 
+                              data = pfactor_red, 
+                              control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[13,1]
+  cortvol_intse <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma + psych_med_recode +
+                                  site_totalvol_cent + scalesubjtotalvol + site_totalvol_cent*wave + scalesubjtotalvol*wave + 
+                                  (1 + wave|site_id/id), 
+                                data = pfactor_red, 
+                                control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[11,2]
+  cortvol_slse <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma + psych_med_recode +
+                                 site_totalvol_cent + scalesubjtotalvol + site_totalvol_cent*wave + scalesubjtotalvol*wave + 
+                                 (1 + wave|site_id/id), 
+                               data = pfactor_red, 
+                               control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[13,2]
+  cortvol_intp <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma + psych_med_recode +
+                                 site_totalvol_cent + scalesubjtotalvol + site_totalvol_cent*wave + scalesubjtotalvol*wave + 
+                                 (1 + wave|site_id/id), 
+                               data = pfactor_red, 
+                               control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[11,5]
+  cortvol_slp <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma + psych_med_recode +
+                                site_totalvol_cent + scalesubjtotalvol + site_totalvol_cent*wave + scalesubjtotalvol*wave + 
+                                (1 + wave|site_id/id), 
+                              data = pfactor_red, 
+                              control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[13,5]
+  subcortvol_intb <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma + psych_med_recode +
+                                    site_subcort_vol_cent + scalesubjsubcort_vol + site_subcort_vol_cent*wave + scalesubjsubcort_vol*wave + 
+                                    (1 + wave|site_id/id), 
+                                  data = pfactor_red, 
+                                  control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[11,1]
+  subcortvol_slb <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma + psych_med_recode +
+                                   site_subcort_vol_cent + scalesubjsubcort_vol + site_subcort_vol_cent*wave + scalesubjsubcort_vol*wave +
+                                   (1 + wave|site_id/id), 
+                                 data = pfactor_red, 
+                                 control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[13,1]
+  subcortvol_intse <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma + psych_med_recode +
+                                     site_subcort_vol_cent + scalesubjsubcort_vol + site_subcort_vol_cent*wave + scalesubjsubcort_vol*wave +
+                                     (1 + wave|site_id/id), 
+                                   data = pfactor_red, 
+                                   control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[11,2]
+  subcortvol_slse <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma + psych_med_recode +
+                                    site_subcort_vol_cent + scalesubjsubcort_vol + site_subcort_vol_cent*wave + scalesubjsubcort_vol*wave +
+                                    (1 + wave|site_id/id), 
+                                  data = pfactor_red, 
+                                  control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[13,2]
+  subcortvol_intp <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma + psych_med_recode +
+                                    site_subcort_vol_cent + scalesubjsubcort_vol + site_subcort_vol_cent*wave + scalesubjsubcort_vol*wave + 
+                                    (1 + wave|site_id/id), 
+                                  data = pfactor_red, 
+                                  control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[11,5]
+  subcortvol_slp <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma + psych_med_recode +
+                                   site_subcort_vol_cent + scalesubjsubcort_vol + site_subcort_vol_cent*wave + scalesubjsubcort_vol*wave + 
+                                   (1 + wave|site_id/id), 
+                                 data = pfactor_red, 
+                                 control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[13,5]
+  newb <- c(CT_intb,CT_slb,SA_intb,SA_slb,cortvol_intb,cortvol_slb,subcortvol_intb,subcortvol_slb)
+  wholebrainst_meds <- cbind(wholebrainst_meds,newb)
+  names(wholebrainst_meds)[ncol(wholebrainst_meds)] <- names(pfactor_red)[i]
+  newse <- c(CT_intse,CT_slse,SA_intse,SA_slse,cortvol_intse,cortvol_slse,subcortvol_intse,subcortvol_slse)
+  wholebrainst_meds <- cbind(wholebrainst_meds,newse)
+  names(wholebrainst_meds)[ncol(wholebrainst_meds)] <- names(pfactor_red)[i]
+  newp <- c(CT_intp,CT_slp,SA_intp,SA_slp,cortvol_intp,cortvol_slp,subcortvol_intp,subcortvol_slp)
+  wholebrainst_meds <- cbind(wholebrainst_meds,newp)
+  names(wholebrainst_meds)[ncol(wholebrainst_meds)] <- names(pfactor_red)[i]
+}
+wholebrainst_meds
+
+names(wholebrainst_meds) <- c("x","p_beta","p_se","p_pval","ext_beta","ext_se","ext_pval","int_beta","int_se","int_pval",
+                              "nd_beta","nd_se","nd_pval","som_beta","som_se","som_pval","det_beta","det_se","det_pval")
+
+#calculate 95% CIs and create lower and upper bound variables 
+wholebrainst_meds$ci_lower_p <- wholebrainst_meds$p_beta - 1.96*wholebrainst_meds$p_se 
+wholebrainst_meds$ci_upper_p <- wholebrainst_meds$p_beta + 1.96*wholebrainst_meds$p_se 
+wholebrainst_meds$ci_lower_ext <- wholebrainst_meds$ext_beta - 1.96*wholebrainst_meds$ext_se 
+wholebrainst_meds$ci_upper_ext <- wholebrainst_meds$ext_beta + 1.96*wholebrainst_meds$ext_se 
+wholebrainst_meds$ci_lower_int <- wholebrainst_meds$int_beta - 1.96*wholebrainst_meds$int_se 
+wholebrainst_meds$ci_upper_int <- wholebrainst_meds$int_beta + 1.96*wholebrainst_meds$int_se 
+wholebrainst_meds$ci_lower_nd <- wholebrainst_meds$nd_beta - 1.96*wholebrainst_meds$nd_se 
+wholebrainst_meds$ci_upper_nd <- wholebrainst_meds$nd_beta + 1.96*wholebrainst_meds$nd_se 
+wholebrainst_meds$ci_lower_som <- wholebrainst_meds$som_beta - 1.96*wholebrainst_meds$som_se 
+wholebrainst_meds$ci_upper_som <- wholebrainst_meds$som_beta + 1.96*wholebrainst_meds$som_se
+wholebrainst_meds$ci_lower_det <- wholebrainst_meds$det_beta - 1.96*wholebrainst_meds$det_se 
+wholebrainst_meds$ci_upper_det <- wholebrainst_meds$det_beta + 1.96*wholebrainst_meds$det_se
+
+write.csv(wholebrainst_meds, "Global Structure MLM Analysis Output Standardized for Table_meds_SuppTable10.csv") #write csv file
+
+pval_med <- dplyr::select(wholebrainst_meds, c("p_pval","ext_pval","int_pval","nd_pval","som_pval","det_pval"))
+pval_med_fdr <- transform(pval_med, adj.p = p.adjust(as.matrix(pval_med),method = "BH"))
+sum(pval_med_fdr$adj.p<0.05)
+write.csv(pval_med_fdr, "FDR adjusted pvalues_global structure analysis_meds.csv")
+
+#conditional three-level growth model with global brain structure measures predicting the psychopathology factor scores from higher-order/correlated factors models (looped) 
+#covariates: sex, age, scanner model dummies, remote/hybrid visit setting
+#standardized betas, standard errors, and p-values for intercepts (i.e., intb, intse, intp) and slopes (i.e., slb, slse, slp) were saved in a csv file
+
+wholebrainst_remote <- data.frame(x=c("CT_int","CT_sl","SA_int","SA_sl","cortvol_int","cortvol_sl","subcortvol_int","subcortvol_sl"))
+for (i in 424:429){ # columns are factor scores
+  CT_intb <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma + remote +
+                            site_meanct_cent + scalesubjmeanct + site_meanct_cent*wave + scalesubjmeanct*wave +
+                            (1 + wave|site_id/id), #random intercept and slope for subject and site 
+                          data = pfactor_red, 
+                          control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[11,1]
+  CT_slb <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma + remote +
+                           site_meanct_cent + scalesubjmeanct + site_meanct_cent*wave + scalesubjmeanct*wave +
+                           (1 + wave|site_id/id), 
+                         data = pfactor_red, 
+                         control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[13,1]
+  CT_intse <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma + remote +
+                             site_meanct_cent + scalesubjmeanct + site_meanct_cent*wave + scalesubjmeanct*wave + 
+                             (1 + wave|site_id/id), 
+                           data = pfactor_red, 
+                           control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[11,2]
+  CT_slse <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma + remote +
+                            site_meanct_cent + scalesubjmeanct + site_meanct_cent*wave + scalesubjmeanct*wave + 
+                            (1 + wave|site_id/id), 
+                          data = pfactor_red, 
+                          control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[13,2]
+  CT_intp <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma + remote +
+                            site_meanct_cent + scalesubjmeanct + site_meanct_cent*wave + scalesubjmeanct*wave + 
+                            (1 + wave|site_id/id), 
+                          data = pfactor_red, 
+                          control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[11,5]
+  CT_slp <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma + remote +
+                           site_meanct_cent + scalesubjmeanct + site_meanct_cent*wave + scalesubjmeanct*wave + 
+                           (1 + wave|site_id/id), 
+                         data = pfactor_red, 
+                         control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[13,5]
+  SA_intb <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma + remote +
+                            site_totalarea_cent + scalesubjtotalarea + site_totalarea_cent*wave + scalesubjtotalarea*wave + 
+                            (1 + wave|site_id/id), 
+                          data = pfactor_red, 
+                          control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[11,1]
+  SA_slb <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma + remote +
+                           site_totalarea_cent + scalesubjtotalarea + site_totalarea_cent*wave + scalesubjtotalarea*wave + 
+                           (1 + wave|site_id/id), 
+                         data = pfactor_red, 
+                         control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[13,1]
+  SA_intse <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma + remote +
+                             site_totalarea_cent + scalesubjtotalarea + site_totalarea_cent*wave + scalesubjtotalarea*wave +
+                             (1 + wave|site_id/id), 
+                           data = pfactor_red, 
+                           control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[11,2]
+  SA_slse <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma + remote +
+                            site_totalarea_cent + scalesubjtotalarea + site_totalarea_cent*wave + scalesubjtotalarea*wave +
+                            (1 + wave|site_id/id), 
+                          data = pfactor_red, 
+                          control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[13,2]
+  SA_intp <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma + remote +
+                            site_totalarea_cent + scalesubjtotalarea + site_totalarea_cent*wave + scalesubjtotalarea*wave +
+                            (1 + wave|site_id/id), 
+                          data = pfactor_red, 
+                          control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[11,5]
+  SA_slp <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma + remote +
+                           site_totalarea_cent + scalesubjtotalarea + site_totalarea_cent*wave + scalesubjtotalarea*wave + 
+                           (1 + wave|site_id/id), 
+                         data = pfactor_red, 
+                         control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[13,5]
+  cortvol_intb <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma + remote +
+                                 site_totalvol_cent + scalesubjtotalvol + site_totalvol_cent*wave + scalesubjtotalvol*wave + 
+                                 (1 + wave|site_id/id), 
+                               data = pfactor_red, 
+                               control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[11,1]
+  cortvol_slb <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma + remote +
+                                site_totalvol_cent + scalesubjtotalvol + site_totalvol_cent*wave + scalesubjtotalvol*wave + 
+                                (1 + wave|site_id/id), 
+                              data = pfactor_red, 
+                              control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[13,1]
+  cortvol_intse <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma + remote +
+                                  site_totalvol_cent + scalesubjtotalvol + site_totalvol_cent*wave + scalesubjtotalvol*wave + 
+                                  (1 + wave|site_id/id), 
+                                data = pfactor_red, 
+                                control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[11,2]
+  cortvol_slse <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma + remote +
+                                 site_totalvol_cent + scalesubjtotalvol + site_totalvol_cent*wave + scalesubjtotalvol*wave + 
+                                 (1 + wave|site_id/id), 
+                               data = pfactor_red, 
+                               control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[13,2]
+  cortvol_intp <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma + remote +
+                                 site_totalvol_cent + scalesubjtotalvol + site_totalvol_cent*wave + scalesubjtotalvol*wave + 
+                                 (1 + wave|site_id/id), 
+                               data = pfactor_red, 
+                               control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[11,5]
+  cortvol_slp <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma + remote +
+                                site_totalvol_cent + scalesubjtotalvol + site_totalvol_cent*wave + scalesubjtotalvol*wave + 
+                                (1 + wave|site_id/id), 
+                              data = pfactor_red, 
+                              control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[13,5]
+  subcortvol_intb <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma + remote +
+                                    site_subcort_vol_cent + scalesubjsubcort_vol + site_subcort_vol_cent*wave + scalesubjsubcort_vol*wave + 
+                                    (1 + wave|site_id/id), 
+                                  data = pfactor_red, 
+                                  control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[11,1]
+  subcortvol_slb <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma + remote +
+                                   site_subcort_vol_cent + scalesubjsubcort_vol + site_subcort_vol_cent*wave + scalesubjsubcort_vol*wave +
+                                   (1 + wave|site_id/id), 
+                                 data = pfactor_red, 
+                                 control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[13,1]
+  subcortvol_intse <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma + remote +
+                                     site_subcort_vol_cent + scalesubjsubcort_vol + site_subcort_vol_cent*wave + scalesubjsubcort_vol*wave +
+                                     (1 + wave|site_id/id), 
+                                   data = pfactor_red, 
+                                   control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[11,2]
+  subcortvol_slse <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma + remote +
+                                    site_subcort_vol_cent + scalesubjsubcort_vol + site_subcort_vol_cent*wave + scalesubjsubcort_vol*wave +
+                                    (1 + wave|site_id/id), 
+                                  data = pfactor_red, 
+                                  control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[13,2]
+  subcortvol_intp <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma + remote +
+                                    site_subcort_vol_cent + scalesubjsubcort_vol + site_subcort_vol_cent*wave + scalesubjsubcort_vol*wave + 
+                                    (1 + wave|site_id/id), 
+                                  data = pfactor_red, 
+                                  control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[11,5]
+  subcortvol_slp <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma + remote +
+                                   site_subcort_vol_cent + scalesubjsubcort_vol + site_subcort_vol_cent*wave + scalesubjsubcort_vol*wave + 
+                                   (1 + wave|site_id/id), 
+                                 data = pfactor_red, 
+                                 control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[13,5]
+  newb <- c(CT_intb,CT_slb,SA_intb,SA_slb,cortvol_intb,cortvol_slb,subcortvol_intb,subcortvol_slb)
+  wholebrainst_remote <- cbind(wholebrainst_remote,newb)
+  names(wholebrainst_remote)[ncol(wholebrainst_remote)] <- names(pfactor_red)[i]
+  newse <- c(CT_intse,CT_slse,SA_intse,SA_slse,cortvol_intse,cortvol_slse,subcortvol_intse,subcortvol_slse)
+  wholebrainst_remote <- cbind(wholebrainst_remote,newse)
+  names(wholebrainst_remote)[ncol(wholebrainst_remote)] <- names(pfactor_red)[i]
+  newp <- c(CT_intp,CT_slp,SA_intp,SA_slp,cortvol_intp,cortvol_slp,subcortvol_intp,subcortvol_slp)
+  wholebrainst_remote <- cbind(wholebrainst_remote,newp)
+  names(wholebrainst_remote)[ncol(wholebrainst_remote)] <- names(pfactor_red)[i]
+}
+wholebrainst_remote
+
+names(wholebrainst_remote) <- c("x","p_beta","p_se","p_pval","ext_beta","ext_se","ext_pval","int_beta","int_se","int_pval",
+                                "nd_beta","nd_se","nd_pval","som_beta","som_se","som_pval","det_beta","det_se","det_pval")
+
+#calculate 95% CIs and create lower and upper bound variables 
+wholebrainst_remote$ci_lower_p <- wholebrainst_remote$p_beta - 1.96*wholebrainst_remote$p_se 
+wholebrainst_remote$ci_upper_p <- wholebrainst_remote$p_beta + 1.96*wholebrainst_remote$p_se 
+wholebrainst_remote$ci_lower_ext <- wholebrainst_remote$ext_beta - 1.96*wholebrainst_remote$ext_se 
+wholebrainst_remote$ci_upper_ext <- wholebrainst_remote$ext_beta + 1.96*wholebrainst_remote$ext_se 
+wholebrainst_remote$ci_lower_int <- wholebrainst_remote$int_beta - 1.96*wholebrainst_remote$int_se 
+wholebrainst_remote$ci_upper_int <- wholebrainst_remote$int_beta + 1.96*wholebrainst_remote$int_se 
+wholebrainst_remote$ci_lower_nd <- wholebrainst_remote$nd_beta - 1.96*wholebrainst_remote$nd_se 
+wholebrainst_remote$ci_upper_nd <- wholebrainst_remote$nd_beta + 1.96*wholebrainst_remote$nd_se 
+wholebrainst_remote$ci_lower_som <- wholebrainst_remote$som_beta - 1.96*wholebrainst_remote$som_se 
+wholebrainst_remote$ci_upper_som <- wholebrainst_remote$som_beta + 1.96*wholebrainst_remote$som_se
+wholebrainst_remote$ci_lower_det <- wholebrainst_remote$det_beta - 1.96*wholebrainst_remote$det_se 
+wholebrainst_remote$ci_upper_det <- wholebrainst_remote$det_beta + 1.96*wholebrainst_remote$det_se
+
+write.csv(wholebrainst_remote, "Global Structure MLM Analysis Output Standardized for Table_remote_SuppTable11.csv") #write csv file
+
+#FDR correction
+pval_remote <- dplyr::select(wholebrainst_remote, c("p_pval","ext_pval","int_pval","nd_pval","som_pval","det_pval"))
+pval_remote_fdr <- transform(pval_remote, adj.p = p.adjust(as.matrix(pval_remote),method = "BH"))
+sum(pval_remote_fdr$adj.p<0.05)
+write.csv(pval_remote_fdr, "FDR adjusted pvalues_global structure analysis_remote.csv")
+
+#conditional three-level growth model with global brain structure measures predicting the psychopathology factor scores from the bifactor model (looped) 
+#covariates: sex, age, race/ethnicity identity dummies, scanner model dummies
+#standardized betas, standard errors, and p-values for intercepts (i.e., intb, intse, intp) and slopes (i.e., slb, slse, slp) were saved in a csv file
+
+wholebrainst_bi <- data.frame(x=c("CT_int","CT_sl","SA_int","SA_sl","cortvol_int","cortvol_sl","subcortvol_int","subcortvol_sl"))
+for (i in 430:435){ # columns are factor scores
+  CT_intb <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma +
+                            site_meanct_cent + scalesubjmeanct + site_meanct_cent*wave + scalesubjmeanct*wave +
+                            (1 + wave|site_id/id), #random intercept and slope for subject and site 
+                          data = pfactor_red, 
+                          control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[10,1]
+  CT_slb <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma +
+                           site_meanct_cent + scalesubjmeanct + site_meanct_cent*wave + scalesubjmeanct*wave +
+                           (1 + wave|site_id/id), 
+                         data = pfactor_red, 
+                         control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[12,1]
+  CT_intse <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma +
+                             site_meanct_cent + scalesubjmeanct + site_meanct_cent*wave + scalesubjmeanct*wave + 
+                             (1 + wave|site_id/id), 
+                           data = pfactor_red, 
+                           control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[10,2]
+  CT_slse <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma +
+                            site_meanct_cent + scalesubjmeanct + site_meanct_cent*wave + scalesubjmeanct*wave + 
+                            (1 + wave|site_id/id), 
+                          data = pfactor_red, 
+                          control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[12,2]
+  CT_intp <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma +
+                            site_meanct_cent + scalesubjmeanct + site_meanct_cent*wave + scalesubjmeanct*wave + 
+                            (1 + wave|site_id/id), 
+                          data = pfactor_red, 
+                          control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[10,5]
+  CT_slp <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma +
+                           site_meanct_cent + scalesubjmeanct + site_meanct_cent*wave + scalesubjmeanct*wave + 
+                           (1 + wave|site_id/id), 
+                         data = pfactor_red, 
+                         control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[12,5]
+  SA_intb <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma +
+                            site_totalarea_cent + scalesubjtotalarea + site_totalarea_cent*wave + scalesubjtotalarea*wave + 
+                            (1 + wave|site_id/id), 
+                          data = pfactor_red, 
+                          control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[10,1]
+  SA_slb <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma +
+                           site_totalarea_cent + scalesubjtotalarea + site_totalarea_cent*wave + scalesubjtotalarea*wave + 
+                           (1 + wave|site_id/id), 
+                         data = pfactor_red, 
+                         control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[12,1]
+  SA_intse <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma +
+                             site_totalarea_cent + scalesubjtotalarea + site_totalarea_cent*wave + scalesubjtotalarea*wave +
+                             (1 + wave|site_id/id), 
+                           data = pfactor_red, 
+                           control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[10,2]
+  SA_slse <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma +
+                            site_totalarea_cent + scalesubjtotalarea + site_totalarea_cent*wave + scalesubjtotalarea*wave +
+                            (1 + wave|site_id/id), 
+                          data = pfactor_red, 
+                          control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[12,2]
+  SA_intp <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma +
+                            site_totalarea_cent + scalesubjtotalarea + site_totalarea_cent*wave + scalesubjtotalarea*wave +
+                            (1 + wave|site_id/id), 
+                          data = pfactor_red, 
+                          control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[10,5]
+  SA_slp <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma +
+                           site_totalarea_cent + scalesubjtotalarea + site_totalarea_cent*wave + scalesubjtotalarea*wave + 
+                           (1 + wave|site_id/id), 
+                         data = pfactor_red, 
+                         control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[12,5]
+  cortvol_intb <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma +
+                                 site_totalvol_cent + scalesubjtotalvol + site_totalvol_cent*wave + scalesubjtotalvol*wave + 
+                                 (1 + wave|site_id/id), 
+                               data = pfactor_red, 
+                               control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[10,1]
+  cortvol_slb <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma +
+                                site_totalvol_cent + scalesubjtotalvol + site_totalvol_cent*wave + scalesubjtotalvol*wave + 
+                                (1 + wave|site_id/id), 
+                              data = pfactor_red, 
+                              control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[12,1]
+  cortvol_intse <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma +
+                                  site_totalvol_cent + scalesubjtotalvol + site_totalvol_cent*wave + scalesubjtotalvol*wave + 
+                                  (1 + wave|site_id/id), 
+                                data = pfactor_red, 
+                                control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[10,2]
+  cortvol_slse <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma +
+                                 site_totalvol_cent + scalesubjtotalvol + site_totalvol_cent*wave + scalesubjtotalvol*wave + 
+                                 (1 + wave|site_id/id), 
+                               data = pfactor_red, 
+                               control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[12,2]
+  cortvol_intp <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma +
+                                 site_totalvol_cent + scalesubjtotalvol + site_totalvol_cent*wave + scalesubjtotalvol*wave + 
+                                 (1 + wave|site_id/id), 
+                               data = pfactor_red, 
+                               control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[10,5]
+  cortvol_slp <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma +
+                                site_totalvol_cent + scalesubjtotalvol + site_totalvol_cent*wave + scalesubjtotalvol*wave + 
+                                (1 + wave|site_id/id), 
+                              data = pfactor_red, 
+                              control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[12,5]
+  subcortvol_intb <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma +
+                                    site_subcort_vol_cent + scalesubjsubcort_vol + site_subcort_vol_cent*wave + scalesubjsubcort_vol*wave + 
+                                    (1 + wave|site_id/id), 
+                                  data = pfactor_red, 
+                                  control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[10,1]
+  subcortvol_slb <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma +
+                                   site_subcort_vol_cent + scalesubjsubcort_vol + site_subcort_vol_cent*wave + scalesubjsubcort_vol*wave +
+                                   (1 + wave|site_id/id), 
+                                 data = pfactor_red, 
+                                 control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[12,1]
+  subcortvol_intse <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma +
+                                     site_subcort_vol_cent + scalesubjsubcort_vol + site_subcort_vol_cent*wave + scalesubjsubcort_vol*wave +
+                                     (1 + wave|site_id/id), 
+                                   data = pfactor_red, 
+                                   control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[10,2]
+  subcortvol_slse <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma +
+                                    site_subcort_vol_cent + scalesubjsubcort_vol + site_subcort_vol_cent*wave + scalesubjsubcort_vol*wave +
+                                    (1 + wave|site_id/id), 
+                                  data = pfactor_red, 
+                                  control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[12,2]
+  subcortvol_intp <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma +
+                                    site_subcort_vol_cent + scalesubjsubcort_vol + site_subcort_vol_cent*wave + scalesubjsubcort_vol*wave + 
+                                    (1 + wave|site_id/id), 
+                                  data = pfactor_red, 
+                                  control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[10,5]
+  subcortvol_slp <- summary(lmer(pfactor_red[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma +
+                                   site_subcort_vol_cent + scalesubjsubcort_vol + site_subcort_vol_cent*wave + scalesubjsubcort_vol*wave + 
+                                   (1 + wave|site_id/id), 
+                                 data = pfactor_red, 
+                                 control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[12,5]
+  newb <- c(CT_intb,CT_slb,SA_intb,SA_slb,cortvol_intb,cortvol_slb,subcortvol_intb,subcortvol_slb)
+  wholebrainst_bi <- cbind(wholebrainst_bi,newb)
+  names(wholebrainst_bi)[ncol(wholebrainst_bi)] <- names(pfactor_red)[i]
+  newse <- c(CT_intse,CT_slse,SA_intse,SA_slse,cortvol_intse,cortvol_slse,subcortvol_intse,subcortvol_slse)
+  wholebrainst_bi <- cbind(wholebrainst_bi,newse)
+  names(wholebrainst_bi)[ncol(wholebrainst_bi)] <- names(pfactor_red)[i]
+  newp <- c(CT_intp,CT_slp,SA_intp,SA_slp,cortvol_intp,cortvol_slp,subcortvol_intp,subcortvol_slp)
+  wholebrainst_bi <- cbind(wholebrainst_bi,newp)
+  names(wholebrainst_bi)[ncol(wholebrainst_bi)] <- names(pfactor_red)[i]
+}
+wholebrainst_bi
+
+names(wholebrainst_bi) <- c("x","p_beta","p_se","p_pval","ext_beta","ext_se","ext_pval","int_beta","int_se","int_pval",
+                            "nd_beta","nd_se","nd_pval","som_beta","som_se","som_pval","det_beta","det_se","det_pval")
+
+#calculate 95% CIs and create lower and upper bound variables 
+wholebrainst_bi$ci_lower_p <- wholebrainst_bi$p_beta - 1.96*wholebrainst_bi$p_se 
+wholebrainst_bi$ci_upper_p <- wholebrainst_bi$p_beta + 1.96*wholebrainst_bi$p_se 
+wholebrainst_bi$ci_lower_ext <- wholebrainst_bi$ext_beta - 1.96*wholebrainst_bi$ext_se 
+wholebrainst_bi$ci_upper_ext <- wholebrainst_bi$ext_beta + 1.96*wholebrainst_bi$ext_se 
+wholebrainst_bi$ci_lower_int <- wholebrainst_bi$int_beta - 1.96*wholebrainst_bi$int_se 
+wholebrainst_bi$ci_upper_int <- wholebrainst_bi$int_beta + 1.96*wholebrainst_bi$int_se 
+wholebrainst_bi$ci_lower_nd <- wholebrainst_bi$nd_beta - 1.96*wholebrainst_bi$nd_se 
+wholebrainst_bi$ci_upper_nd <- wholebrainst_bi$nd_beta + 1.96*wholebrainst_bi$nd_se 
+wholebrainst_bi$ci_lower_som <- wholebrainst_bi$som_beta - 1.96*wholebrainst_bi$som_se 
+wholebrainst_bi$ci_upper_som <- wholebrainst_bi$som_beta + 1.96*wholebrainst_bi$som_se
+wholebrainst_bi$ci_lower_det <- wholebrainst_bi$det_beta - 1.96*wholebrainst_bi$det_se 
+wholebrainst_bi$ci_upper_det <- wholebrainst_bi$det_beta + 1.96*wholebrainst_bi$det_se
+
+write.csv(wholebrainst_bi, "Global Structure MLM Analysis Output Standardized for Table_bifactor_SuppTable12.csv") #write csv file
+
+#FDR correction
+pval_bi <- dplyr::select(wholebrainst_bi, c("p_pval","ext_pval","int_pval","nd_pval","som_pval","det_pval"))
+pval_bi_fdr <- transform(pval_bi, adj.p = p.adjust(as.matrix(pval_bi),method = "BH"))
+sum(pval_bi_fdr$adj.p<0.05)
+write.csv(pval_bi_fdr, "FDR adjusted pvalues_global structure analysis_bifactor.csv")
+
+#Sensitivity analysis dropping subjects with missing CBCL data at both follow-up waves 2 and 3
+#remove excluded subjects/missing values
+pfactor_red_drop <- pfactor[which(pfactor$inclusion_fam_old_high!=0 & pfactor$cbcl_demo_inclusion_use!=0 & pfactor$smri_inclusion_use!=0 &
+                                    pfactor$fu_missing_sum!=2 & pfactor$wave!="NA" & pfactor$p_ho!="NA" & pfactor$smri_area_cdk_banksstslh!="NA"),]
+
+#create new variable renaming nums to id
+pfactor_red_drop$id <- pfactor_red_drop$nums
+
+#create new variables renaming TICs of no interest
+pfactor_red_drop$age <- pfactor_red_drop$interview_age_baseline
+pfactor_red_drop$sex <- pfactor_red_drop$sex_coded
+
+#examine descriptives of factor scores 
+describeBy(pfactor_red_drop$p_ho, group=pfactor_red_drop$wave)
+
+#scale p, ext, int, nd, som, det factor scores
+pfactor_red_drop$scalep <- scale(pfactor_red_drop$p_ho)
+pfactor_red_drop$scaleext <- scale(pfactor_red_drop$ext_corr)
+pfactor_red_drop$scaleint <- scale(pfactor_red_drop$int_corr)
+pfactor_red_drop$scalend <- scale(pfactor_red_drop$nd_corr)
+pfactor_red_drop$scalesom <- scale(pfactor_red_drop$som_corr)
+pfactor_red_drop$scaledet <- scale(pfactor_red_drop$det_corr)
+
+##Global structure analysis
+
+#rescale and rename global brain variables
+pfactor_red_drop$wb_cort_vol <- pfactor_red_drop$smri_vol_cdk_total/10000
+pfactor_red_drop$meanwb_ct <- pfactor_red_drop$smri_thick_cdk_mean
+pfactor_red_drop$wb_cort_area <- pfactor_red_drop$smri_area_cdk_total/10000
+pfactor_red_drop$subcort_vol <- pfactor_red_drop$smri_vol_scs_subcorticalgv/1000
+
+#Conditional three-level linear growth model
+
+#Group-mean center global brain structure predictors by site 
+groupmeans_drop <- aggregate(cbind(meanwb_ct,wb_cort_vol,wb_cort_area,subcort_vol)~site_id, pfactor_red_drop, mean)
+names(groupmeans_drop) <- c("site_id","site_meanct","site_totalvol","site_totalarea","site_subcort_vol")
+groupmeans_drop$site_meanct_cent <- groupmeans_drop$site_meanct - mean(groupmeans_drop$site_meanct)
+groupmeans_drop$site_totalvol_cent <- groupmeans_drop$site_totalvol - mean(groupmeans_drop$site_totalvol)
+groupmeans_drop$site_totalarea_cent <- groupmeans_drop$site_totalarea - mean(groupmeans_drop$site_totalarea)
+groupmeans_drop$site_subcort_vol_cent <- groupmeans_drop$site_subcort_vol - mean(groupmeans_drop$site_subcort_vol)
+
+#merge centered variables (groupmeans) with pfactor_red dataset
+pfactor_red_drop <- join(pfactor_red_drop, groupmeans_drop, by="site_id")
+
+#Center global brain structure variables by subject 
+pfactor_red_drop$subjmeanct <- pfactor_red_drop$meanwb_ct - pfactor_red_drop$site_meanct
+pfactor_red_drop$subjtotalvol <- pfactor_red_drop$wb_cort_vol - pfactor_red_drop$site_totalvol
+pfactor_red_drop$subjtotalarea <- pfactor_red_drop$wb_cort_area - pfactor_red_drop$site_totalarea
+pfactor_red_drop$subjsubcort_vol <- pfactor_red_drop$subcort_vol - pfactor_red_drop$site_subcort_vol
+
+#scale subjmeanct, subjmeanvol, subjmeanarea 
+pfactor_red_drop$scalesubjmeanct <- scale(pfactor_red_drop$subjmeanct)
+pfactor_red_drop$scalesubjtotalvol <- scale(pfactor_red_drop$subjtotalvol)
+pfactor_red_drop$scalesubjtotalarea <- scale(pfactor_red_drop$subjtotalarea)
+pfactor_red_drop$scalesubjsubcort_vol <- scale(pfactor_red_drop$subjsubcort_vol)
+pfactor_red_drop$scalesite_totalvol_cent <- scale(pfactor_red_drop$site_totalvol_cent)
+pfactor_red_drop$scalesite_subcort_vol_cent <- scale(pfactor_red_drop$site_subcort_vol_cent)
+pfactor_red_drop$scalesite_totalarea_cent <- scale(pfactor_red_drop$site_totalarea_cent)
+pfactor_red_drop$scalesite_meanct_cent <- scale(pfactor_red_drop$site_meanct_cent)
+
+#conditional three-level growth model with global brain structure measures predicting the psychopathology factor scores from higher-order/correlated factors models (looped)
+#drop 358 subjects with missing CBCL data at both waves 2 & 3
+#covariates: sex, age, scanner model dummies
+#standardized betas, standard errors, and p-values for intercepts (i.e., intb, intse, intp) and slopes (i.e., slb, slse, slp) were saved in a csv file
+
+wholebrainst_drop <- data.frame(x=c("CT_int","CT_sl","SA_int","SA_sl","cortvol_int","cortvol_sl","subcortvol_int","subcortvol_sl"))
+for (i in 424:429){ # columns are factor scores 
+  CT_intb <- summary(lmer(pfactor_red_drop[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma +
+                            site_meanct_cent + scalesubjmeanct + site_meanct_cent*wave + scalesubjmeanct*wave +
+                            (1 + wave|site_id/id), #random intercept and slope for subject and site 
+                          data = pfactor_red_drop, 
+                          control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[10,1]
+  CT_slb <- summary(lmer(pfactor_red_drop[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma +
+                           site_meanct_cent + scalesubjmeanct + site_meanct_cent*wave + scalesubjmeanct*wave +
+                           (1 + wave|site_id/id), 
+                         data = pfactor_red_drop, 
+                         control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[12,1]
+  CT_intse <- summary(lmer(pfactor_red_drop[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma +
+                             site_meanct_cent + scalesubjmeanct + site_meanct_cent*wave + scalesubjmeanct*wave + 
+                             (1 + wave|site_id/id), 
+                           data = pfactor_red_drop, 
+                           control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[10,2]
+  CT_slse <- summary(lmer(pfactor_red_drop[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma +
+                            site_meanct_cent + scalesubjmeanct + site_meanct_cent*wave + scalesubjmeanct*wave + 
+                            (1 + wave|site_id/id), 
+                          data = pfactor_red_drop, 
+                          control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[12,2]
+  CT_intp <- summary(lmer(pfactor_red_drop[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma +
+                            site_meanct_cent + scalesubjmeanct + site_meanct_cent*wave + scalesubjmeanct*wave + 
+                            (1 + wave|site_id/id), 
+                          data = pfactor_red_drop, 
+                          control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[10,5]
+  CT_slp <- summary(lmer(pfactor_red_drop[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma +
+                           site_meanct_cent + scalesubjmeanct + site_meanct_cent*wave + scalesubjmeanct*wave + 
+                           (1 + wave|site_id/id), 
+                         data = pfactor_red_drop, 
+                         control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[12,5]
+  SA_intb <- summary(lmer(pfactor_red_drop[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma +
+                            site_totalarea_cent + scalesubjtotalarea + site_totalarea_cent*wave + scalesubjtotalarea*wave + 
+                            (1 + wave|site_id/id), 
+                          data = pfactor_red_drop, 
+                          control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[10,1]
+  SA_slb <- summary(lmer(pfactor_red_drop[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma +
+                           site_totalarea_cent + scalesubjtotalarea + site_totalarea_cent*wave + scalesubjtotalarea*wave + 
+                           (1 + wave|site_id/id), 
+                         data = pfactor_red_drop, 
+                         control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[12,1]
+  SA_intse <- summary(lmer(pfactor_red_drop[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma +
+                             site_totalarea_cent + scalesubjtotalarea + site_totalarea_cent*wave + scalesubjtotalarea*wave +
+                             (1 + wave|site_id/id), 
+                           data = pfactor_red_drop, 
+                           control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[10,2]
+  SA_slse <- summary(lmer(pfactor_red_drop[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma +
+                            site_totalarea_cent + scalesubjtotalarea + site_totalarea_cent*wave + scalesubjtotalarea*wave +
+                            (1 + wave|site_id/id), 
+                          data = pfactor_red_drop, 
+                          control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[12,2]
+  SA_intp <- summary(lmer(pfactor_red_drop[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma +
+                            site_totalarea_cent + scalesubjtotalarea + site_totalarea_cent*wave + scalesubjtotalarea*wave +
+                            (1 + wave|site_id/id), 
+                          data = pfactor_red_drop, 
+                          control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[10,5]
+  SA_slp <- summary(lmer(pfactor_red_drop[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma +
+                           site_totalarea_cent + scalesubjtotalarea + site_totalarea_cent*wave + scalesubjtotalarea*wave + 
+                           (1 + wave|site_id/id), 
+                         data = pfactor_red_drop, 
+                         control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[12,5]
+  cortvol_intb <- summary(lmer(pfactor_red_drop[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma +
+                                 site_totalvol_cent + scalesubjtotalvol + site_totalvol_cent*wave + scalesubjtotalvol*wave + 
+                                 (1 + wave|site_id/id), 
+                               data = pfactor_red_drop, 
+                               control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[10,1]
+  cortvol_slb <- summary(lmer(pfactor_red_drop[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma +
+                                site_totalvol_cent + scalesubjtotalvol + site_totalvol_cent*wave + scalesubjtotalvol*wave + 
+                                (1 + wave|site_id/id), 
+                              data = pfactor_red_drop, 
+                              control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[12,1]
+  cortvol_intse <- summary(lmer(pfactor_red_drop[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma +
+                                  site_totalvol_cent + scalesubjtotalvol + site_totalvol_cent*wave + scalesubjtotalvol*wave + 
+                                  (1 + wave|site_id/id), 
+                                data = pfactor_red_drop, 
+                                control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[10,2]
+  cortvol_slse <- summary(lmer(pfactor_red_drop[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma +
+                                 site_totalvol_cent + scalesubjtotalvol + site_totalvol_cent*wave + scalesubjtotalvol*wave + 
+                                 (1 + wave|site_id/id), 
+                               data = pfactor_red_drop, 
+                               control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[12,2]
+  cortvol_intp <- summary(lmer(pfactor_red_drop[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma +
+                                 site_totalvol_cent + scalesubjtotalvol + site_totalvol_cent*wave + scalesubjtotalvol*wave + 
+                                 (1 + wave|site_id/id), 
+                               data = pfactor_red_drop, 
+                               control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[10,5]
+  cortvol_slp <- summary(lmer(pfactor_red_drop[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma +
+                                site_totalvol_cent + scalesubjtotalvol + site_totalvol_cent*wave + scalesubjtotalvol*wave + 
+                                (1 + wave|site_id/id), 
+                              data = pfactor_red_drop, 
+                              control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[12,5]
+  subcortvol_intb <- summary(lmer(pfactor_red_drop[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma +
+                                    site_subcort_vol_cent + scalesubjsubcort_vol + site_subcort_vol_cent*wave + scalesubjsubcort_vol*wave + 
+                                    (1 + wave|site_id/id), 
+                                  data = pfactor_red_drop, 
+                                  control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[10,1]
+  subcortvol_slb <- summary(lmer(pfactor_red_drop[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma +
+                                   site_subcort_vol_cent + scalesubjsubcort_vol + site_subcort_vol_cent*wave + scalesubjsubcort_vol*wave +
+                                   (1 + wave|site_id/id), 
+                                 data = pfactor_red_drop, 
+                                 control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[12,1]
+  subcortvol_intse <- summary(lmer(pfactor_red_drop[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma +
+                                     site_subcort_vol_cent + scalesubjsubcort_vol + site_subcort_vol_cent*wave + scalesubjsubcort_vol*wave +
+                                     (1 + wave|site_id/id), 
+                                   data = pfactor_red_drop, 
+                                   control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[10,2]
+  subcortvol_slse <- summary(lmer(pfactor_red_drop[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma +
+                                    site_subcort_vol_cent + scalesubjsubcort_vol + site_subcort_vol_cent*wave + scalesubjsubcort_vol*wave +
+                                    (1 + wave|site_id/id), 
+                                  data = pfactor_red_drop, 
+                                  control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[12,2]
+  subcortvol_intp <- summary(lmer(pfactor_red_drop[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma +
+                                    site_subcort_vol_cent + scalesubjsubcort_vol + site_subcort_vol_cent*wave + scalesubjsubcort_vol*wave + 
+                                    (1 + wave|site_id/id), 
+                                  data = pfactor_red_drop, 
+                                  control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[10,5]
+  subcortvol_slp <- summary(lmer(pfactor_red_drop[[i]] ~ wave + sex + age + achieva + discovery + ingenia + prisma +
+                                   site_subcort_vol_cent + scalesubjsubcort_vol + site_subcort_vol_cent*wave + scalesubjsubcort_vol*wave + 
+                                   (1 + wave|site_id/id), 
+                                 data = pfactor_red_drop, 
+                                 control=lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5))))$coefficients[12,5]
+  newb <- c(CT_intb,CT_slb,SA_intb,SA_slb,cortvol_intb,cortvol_slb,subcortvol_intb,subcortvol_slb)
+  wholebrainst_drop <- cbind(wholebrainst_drop,newb)
+  names(wholebrainst_drop)[ncol(wholebrainst_drop)] <- names(pfactor_red_drop)[i]
+  newse <- c(CT_intse,CT_slse,SA_intse,SA_slse,cortvol_intse,cortvol_slse,subcortvol_intse,subcortvol_slse)
+  wholebrainst_drop <- cbind(wholebrainst_drop,newse)
+  names(wholebrainst_drop)[ncol(wholebrainst_drop)] <- names(pfactor_red_drop)[i]
+  newp <- c(CT_intp,CT_slp,SA_intp,SA_slp,cortvol_intp,cortvol_slp,subcortvol_intp,subcortvol_slp)
+  wholebrainst_drop <- cbind(wholebrainst_drop,newp)
+  names(wholebrainst_drop)[ncol(wholebrainst_drop)] <- names(pfactor_red_drop)[i]
+}
+wholebrainst_drop
+
+names(wholebrainst_drop) <- c("x","p_beta","p_se","p_pval","ext_beta","ext_se","ext_pval","int_beta","int_se","int_pval",
+                              "nd_beta","nd_se","nd_pval","som_beta","som_se","som_pval","det_beta","det_se","det_pval")
+
+#calculate 95% CIs and create lower and upper bound variables 
+wholebrainst_drop$ci_lower_p <- wholebrainst_drop$p_beta - 1.96*wholebrainst_drop$p_se 
+wholebrainst_drop$ci_upper_p <- wholebrainst_drop$p_beta + 1.96*wholebrainst_drop$p_se 
+wholebrainst_drop$ci_lower_ext <- wholebrainst_drop$ext_beta - 1.96*wholebrainst_drop$ext_se 
+wholebrainst_drop$ci_upper_ext <- wholebrainst_drop$ext_beta + 1.96*wholebrainst_drop$ext_se 
+wholebrainst_drop$ci_lower_int <- wholebrainst_drop$int_beta - 1.96*wholebrainst_drop$int_se 
+wholebrainst_drop$ci_upper_int <- wholebrainst_drop$int_beta + 1.96*wholebrainst_drop$int_se 
+wholebrainst_drop$ci_lower_nd <- wholebrainst_drop$nd_beta - 1.96*wholebrainst_drop$nd_se 
+wholebrainst_drop$ci_upper_nd <- wholebrainst_drop$nd_beta + 1.96*wholebrainst_drop$nd_se 
+wholebrainst_drop$ci_lower_som <- wholebrainst_drop$som_beta - 1.96*wholebrainst_drop$som_se 
+wholebrainst_drop$ci_upper_som <- wholebrainst_drop$som_beta + 1.96*wholebrainst_drop$som_se
+wholebrainst_drop$ci_lower_det <- wholebrainst_drop$det_beta - 1.96*wholebrainst_drop$det_se 
+wholebrainst_drop$ci_upper_det <- wholebrainst_drop$det_beta + 1.96*wholebrainst_drop$det_se
+
+write.csv(wholebrainst_drop, "Global Structure MLM Analysis Output Standardized for Table_drop_miss_both_fu_waves_SuppTable13.csv") #write csv file
+
+#FDR correction
+pval_drop <- dplyr::select(wholebrainst_drop, c("p_pval","ext_pval","int_pval","nd_pval","som_pval","det_pval"))
+pval_drop_fdr <- transform(pval_drop, adj.p = p.adjust(as.matrix(pval_drop),method = "BH"))
+sum(pval_drop_fdr$adj.p<0.05)
+write.csv(pval_drop_fdr, "FDR adjusted pvalues_global structure analysis_drop_miss_both_fu_waves.csv")
