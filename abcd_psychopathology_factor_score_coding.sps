@@ -1,7 +1,7 @@
 ﻿* Encoding: UTF-8.
 
 ****Create unstandardized factor scores for EXT, INT, ND, SOM, DET, and p from higher-order model and EXT, INT, ND, SOM, DET from correlated factors model for baseline wave 1, wave 2, & wave 3*******
-
+****CBCL item-level variables in this syntax were taken from raw ABCD file "abcd_cbcl01.txt"*****
 ****Multiply CBCL items by unstandardized weight from higher-order model****
     
 ****Wave 1****
