@@ -1,5 +1,5 @@
 #Title: Longitudinal Three-Level Growth Models of Brain Structure Relations with Psychopathology Trajectories with ABCD Study Release 4.0
-#Date: 08/19/2022
+#Date: 10/02/2022
 
 #clear workspace
 rm(list=ls())
@@ -2262,12 +2262,6 @@ vol_parcel$ci_upper_insularh_voli <- vol_parcel$insularh_vol_bi + 1.96*vol_parce
 
 write.csv(vol_parcel, "Parcel-Wise Cortical Volume MLM Analysis Output Standardized_FINAL_SuppTable7.csv") #write csv file
 
-#FDR correction
-pval_vol_parcel_fdr <- transform(newvolpi, adj.p = p.adjust(as.matrix(newvolpi),method = "BH"))
-sum(pval_vol_parcel_fdr$adj.p<0.05)
-write.csv(pval_vol_parcel_fdr, "FDR adjusted pvalues_volume parcel analysis.csv")
-
-
 #Parcel-wise cortical area analyses (68 cortical area parcels)
 #conditional three-level growth model with cortical area parcels predicting the intercept of p factor scores 
 #covariates: sex, age, scanner model dummies
@@ -3090,11 +3084,6 @@ area_parcel$ci_upper_insularh_areai <- area_parcel$insularh_area_bi + 1.96*area_
 
 write.csv(area_parcel, "Parcel-Wise Cortical Area MLM Analysis Output Standardized_FINAL_SuppTable7.csv") #write csv file
 
-#FDR correction
-pval_area_parcel_fdr <- transform(newareapi, adj.p = p.adjust(as.matrix(newareapi),method = "BH"))
-sum(pval_area_parcel_fdr$adj.p<0.05)
-write.csv(pval_area_parcel_fdr, "FDR adjusted pvalues_surface area parcel analysis.csv")
-
 #Parcel-wise subcortical volume analyses (19 subcortical volume parcels)
 #conditional three-level growth model with subcortical volume parcels predicting the intercept of p factor scores 
 #covariates: sex, age, scanner model dummies
@@ -3342,11 +3331,6 @@ sub_parcel$ci_lower_vedcrh_voli <- sub_parcel$vedcrh_vol_bi - 1.96*sub_parcel$ve
 sub_parcel$ci_upper_vedcrh_voli <- sub_parcel$vedcrh_vol_bi + 1.96*sub_parcel$vedcrh_vol_sei
 
 write.csv(sub_parcel, "Parcel-Wise Subcortical Volume MLM Analysis Output Standardized_FINAL_SuppTable7.csv") #write csv file
-
-#FDR correction
-pval_sub_parcel_fdr <- transform(newsubpi, adj.p = p.adjust(as.matrix(newsubpi),method = "BH"))
-sum(pval_sub_parcel_fdr$adj.p<0.05)
-write.csv(pval_sub_parcel_fdr, "FDR adjusted pvalues_subcortical volume parcel analysis.csv")
 
 #Parcel-wise cortical thickness analyses (68 cortical thickness parcels)
 #conditional three-level growth model with cortical thickness parcels predicting the slope of internalizing factor scores 
@@ -4171,11 +4155,13 @@ thick_parcel$ci_upper_insularh_thicks <- thick_parcel$insularh_thick_bs + 1.96*t
 
 write.csv(thick_parcel, "Parcel-Wise Cortical Thickness Standardized_FINAL_SuppTable8.csv") #write csv file
 
-#FDR correction
-pval_thick_parcel_fdr <- transform(newthickps, adj.p = p.adjust(as.matrix(newthickps),method = "BH"))
-sum(pval_thick_parcel_fdr$adj.p<0.05)
-write.csv(pval_thick_parcel_fdr, "FDR adjusted pvalues_thickness parcel analysis.csv")
-
+#FDR correction for all 446 parcel-wise tests (associations of 68 cortical volume, 68 SA, and 19 subcortical volume parcels with
+#intercept of p factor scores, and associations of 68 CT parcels with slope of INT factor scores (223 tests), with and without global
+#brain structure included as covariate = 446 tests)
+parcel_pvals <- read.csv("all_parcel_wise_pvalues_for_FDR_correction.csv",header=TRUE) #import dataframe of all 446 parcel-wise p-values
+pval_fdr <- transform(parcel_pvals, adj.p = p.adjust(as.matrix(parcel_pvals),method = "BH"))
+sum(pval_fdr$adj.p<0.05) #190 out of 446 significant tests
+write.csv(pval_fdr, "FDR adjusted pvalues_allparcelwise_pvals_446_tests.csv")
 
 #ggseg figure of parcel-wise cortical volume analyses with intercept of p  (Figure 2A)
 #showing std. betas for parcels that survived FDR correction
@@ -4183,10 +4169,10 @@ write.csv(pval_thick_parcel_fdr, "FDR adjusted pvalues_thickness parcel analysis
 vol_results_fdr= data.frame(cbind(region=c("bankssts","caudal anterior cingulate","caudal middle frontal","cuneus","entorhinal",
                                            "fusiform","inferior parietal","inferior temporal","isthmus cingulate","lateral occipital",
                                            "lateral orbitofrontal","lingual","medial orbitofrontal","middle temporal","parahippocampal",
-                                           "paracentral","pars opercularis","pars orbitalis","pars triangularis","pericalcarine",
+                                           "paracentral","pars opercularis","pars orbitalis","pars triangularis",
                                            "postcentral","posterior cingulate","precentral","precuneus","rostral anterior cingulate",
                                            "rostral middle frontal","superior frontal","superior parietal","superior temporal",
-                                           "supramarginal","frontal pole","temporal pole","transverse temporal","insula",
+                                           "supramarginal","temporal pole","transverse temporal","insula",
                                            "bankssts","caudal anterior cingulate","caudal middle frontal","cuneus","entorhinal",
                                            "fusiform","inferior parietal","inferior temporal","isthmus cingulate","lateral occipital",
                                            "lateral orbitofrontal","lingual","medial orbitofrontal","middle temporal","parahippocampal",
@@ -4196,17 +4182,17 @@ vol_results_fdr= data.frame(cbind(region=c("bankssts","caudal anterior cingulate
                                            "supramarginal","frontal pole","temporal pole","transverse temporal","insula"),
                                   stdb=c(-0.044442146,-0.037934895,-0.038533423,-0.027301511,-0.032238951,-0.066706143,-0.072769163,
                                          -0.055635515,-0.054843622,-0.04444371,-0.062478719,-0.054294482,-0.03649713,-0.075163216,
-                                         -0.047883583,-0.049940917,-0.024957467,-0.042916,-0.033209818,-0.022804155,-0.072364485,
+                                         -0.047883583,-0.049940917,-0.024957467,-0.042916,-0.033209818,-0.072364485,
                                          -0.058861599,-0.081781108,-0.059394746,-0.054612238,-0.061579186,-0.067041611,-0.061849142,
-                                         -0.061441488,-0.078494473,-0.022668209,-0.043685938,-0.032076471,-0.06441222,-0.038801084,
+                                         -0.061441488,-0.078494473,-0.043685938,-0.032076471,-0.06441222,-0.038801084,
                                          -0.051737306,-0.040442193,-0.029595937,-0.044426026,-0.074568084,-0.07492731,-0.073741701,
                                          -0.035818758,-0.042248873,-0.061502977,-0.033862358,-0.043677825,-0.081320089,-0.040039865,
                                          -0.061203854,-0.031859495,-0.049571224,-0.024763728,-0.025089668,-0.079342578,-0.061865042,
                                          -0.077320108,-0.055878333,-0.04744946,-0.06141488,-0.060528767,-0.048102698,-0.057834141,
                                          -0.070623303,-0.070620839,-0.032523485,-0.040497726,-0.069122537),
                                   hemi=c("left","left","left","left","left","left","left","left","left","left","left","left","left","left",
-                                         "left","left","left","left","left","left","left","left","left","left","left","left","left","left",
-                                         "left","left","left","left","left","left","right","right","right","right","right","right","right",
+                                         "left","left","left","left","left","left","left","left","left","left","left","left","left",
+                                         "left","left","left","left","left","right","right","right","right","right","right","right",
                                          "right","right","right","right","right","right","right","right","right","right","right","right","right",
                                          "right","right","right","right","right","right","right","right","right","right","right","right","right",
                                          "right")),
@@ -4303,11 +4289,14 @@ dev.off()
 #ggseg figure of parcel-wise cortical thickness analyses with slope for internalizing (Figure S2)
 #showing std. betas for parcels that survived FDR correction 
 
-thick_results_fdr = data.frame(cbind(region=c("inferior temporal","lingual","middle temporal","parahippocampal","paracentral","postcentral",
-                                              "precentral","superior parietal","cuneus","postcentral","superior parietal"),
-                                     stdb=c(0.013604721,0.012604543,0.013290636,0.013291767,0.014031809,0.017165795,0.015164515,
-                                            0.013098926,0.012781376,0.015880157,0.013212116),
-                                     hemi=c("left","left","left","left","left","left","left","left","right","right","right")),
+thick_results_fdr = data.frame(cbind(region=c("inferior temporal","lateral occipital","lingual","middle temporal","parahippocampal",
+                                              "paracentral","postcentral","precentral","superior parietal","cuneus","lateral occipital",
+                                              "lingual","parahippocampal","paracentral","postcentral","superior parietal"),
+                                     stdb=c(0.013604721,0.012301561,0.012604543,0.013290636,0.013291767,
+                                            0.014031809,0.017165795,0.015164515,0.013098926,0.012781376,0.012363653,0.015791846,
+                                            0.011094736,0.011355843,0.015880157,0.013212116),
+                                     hemi=c("left","left","left","left","left","left","left","left","left","right","right","right",
+                                            "right","right","right","right")),
                                stringsAsFactors=F)
 
 thick_results_fdr %>% 
